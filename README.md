@@ -1,7 +1,7 @@
 # Scanthia
 
-An open-source, cross-platform DICOM viewer built for speed, modern UX, and
-AI-native extensibility.
+A source-available, native Windows DICOM viewer built for speed, modern
+UX, and AI-native extensibility.
 
 **Status: early development — not for diagnostic use.**
 
@@ -21,6 +21,61 @@ AI-native extensibility.
   example plugin is bundled
 
 ## Architecture
+
+```mermaid
+flowchart TB
+    subgraph app["Application — Qt6 Widgets"]
+        MW["MainWindow — UI shell, tools, dialogs"]
+    end
+
+    subgraph render["Rendering — VTK"]
+        SV["SliceViewer — 2D slice view"]
+        MPR["MprWidget — synchronized MPR"]
+        VW["VolumeWidget — 3D GPU raycast"]
+    end
+
+    subgraph core["Core"]
+        VOL["Volume — canonical axial grid"]
+        SEG["Segmentation — SEG / NIfTI overlays"]
+        DB["StudyDatabase — SQLite library + thumbnails"]
+    end
+
+    subgraph services["Services"]
+        IO["DicomLoader — scan & load"]
+        PACS["PacsClient + StoreScp — C-ECHO / FIND / MOVE / GET / STORE"]
+        DW["DicomWebClient — QIDO / WADO / STOW"]
+        AI["InferenceEngine — ONNX Runtime (CPU / DirectML)"]
+        PM["PluginManager — IAiPlugin DLLs"]
+    end
+
+    MW --> render
+    MW --> core
+    MW --> services
+    render --> VOL
+    SEG --> VOL
+    IO --> VOL
+    PACS --> DB
+    DW --> DB
+    AI --> VOL
+    PM --> AI
+
+    subgraph deps["External dependencies"]
+        direction LR
+        QT["Qt6"]
+        VTK["VTK"]
+        ITK["ITK + GDCM"]
+        DCM["DCMTK"]
+        ORT["ONNX Runtime + DirectML"]
+        SQL["SQLite"]
+    end
+
+    MW -.-> QT
+    render -.-> VTK
+    IO -.-> ITK
+    PACS -.-> DCM
+    AI -.-> ORT
+    DB -.-> SQL
+```
 
 ```
 src/core    data model (Volume, SeriesMeta)
