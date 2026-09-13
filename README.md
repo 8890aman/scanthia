@@ -160,6 +160,7 @@ Installs to `Program Files`, requires admin.
 pacman -S --needed mingw-w64-ucrt-x86_64-toolchain \
     mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja \
     mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-qt6-tools \
+    mingw-w64-ucrt-x86_64-qt6-svg \
     mingw-w64-ucrt-x86_64-vtk mingw-w64-ucrt-x86_64-itk \
     mingw-w64-ucrt-x86_64-dcmtk mingw-w64-ucrt-x86_64-gdcm \
     mingw-w64-ucrt-x86_64-onnxruntime \
