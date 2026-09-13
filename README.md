@@ -1,24 +1,70 @@
-# Scanthia
+<p align="center">
+  <img src="resources/scanthia.png" width="96" alt="Scanthia logo">
+</p>
 
-A source-available, native Windows DICOM viewer built for speed, modern
-UX, and AI-native extensibility.
+<h1 align="center">Scanthia</h1>
 
-**Status: early development — not for diagnostic use.**
+<p align="center">
+  <strong>A native Windows DICOM viewer — fast 2D/MPR/3D visualization,<br>
+  PACS + DICOMweb connectivity, AI-assisted segmentation, and fusion.</strong>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue" alt="License"></a>
+  <img src="https://img.shields.io/badge/platform-Windows-0078D6" alt="Platform: Windows">
+  <img src="https://img.shields.io/badge/C%2B%2B-20-00599C" alt="C++20">
+  <img src="https://img.shields.io/badge/status-early%20development-orange" alt="Status">
+</p>
+
+<p align="center">
+  Built with Qt6 · VTK · ITK · DCMTK · GDCM · ONNX Runtime + DirectML
+</p>
+
+> [!CAUTION]
+> **Research/engineering project — not a certified medical device.** Scanthia
+> has not been cleared by the FDA, CE, or any regulatory body and must not be
+> used for clinical diagnosis. See [DISCLAIMER.txt](DISCLAIMER.txt).
 
 ## Features
 
-- **2D slice viewing** — window/level (left-drag), zoom (right-drag), pan
-  (middle-drag), slice scroll (wheel), cine playback, distance measurements,
-  window presets (lung, bone, brain, …)
-- **MPR** — synchronized axial / sagittal / coronal views with crosshairs
-- **3D volume rendering** — GPU raycasting with CT presets (soft tissue, bone,
-  lung, MIP) and MPR plane indicators
-- **PACS networking** — C-ECHO, study-root C-FIND, C-MOVE and C-GET
-  retrieval, plus a built-in C-STORE SCP to receive pushes
-- **Segmentation** — DICOM SEG and NIfTI/NRRD labelmap overlays
-- **AI-ready** — ONNX Runtime inference engine plus a Qt plugin API
-  (`IAiPlugin`) so models ship as loadable plugins; a threshold-segmenter
-  example plugin is bundled
+**Viewing**
+
+- 2D slice viewing — window/level (left-drag), zoom (right-drag), pan
+  (middle-drag), slice scroll, cine playback, multi-frame support, invert
+  grayscale, distance measurements, window presets (lung, bone, brain, …)
+- MPR — synchronized axial / sagittal / coronal views with crosshairs,
+  oblique plane rotation, double-click maximize/restore
+- 3D — GPU volume raycasting with CT presets (soft tissue, bone, lung, MIP)
+  and MPR plane indicators
+- Fusion — PET/CT-style overlay with resampling onto the base grid and
+  opacity control
+
+**Connectivity**
+
+- PACS — C-ECHO, study-root C-FIND, C-MOVE and C-GET retrieval, a built-in
+  C-STORE SCP to receive pushes, saved node management, scheduled auto-pull,
+  and send-to-node
+- DICOMweb — QIDO / WADO / STOW client
+- `scanthia://` URL protocol for deep links
+
+**Data**
+
+- Local library — SQLite study index with thumbnails and remote-source
+  switching
+- Incremental loading — studies are browsable while still streaming in, with
+  generation-based cancellation on series switch
+- Memory-safe downsampling for studies that exceed the volume budget
+- Segmentation — DICOM SEG and NIfTI/NRRD labelmap overlays, brush tools
+- Export — JPEG, MP4 video, PDF/print, anonymized (de-identified) DICOM,
+  DICOM media/CD
+
+**Extensibility**
+
+- AI inference — ONNX Runtime engine, CPU and DirectML GPU providers;
+  2D NCHW per-slice or 3D NCDHW whole-volume models
+- Plugin API — `IAiPlugin` Qt plugins loaded from `<bindir>/plugins/`;
+  a threshold-segmenter example ships in `plugins/`
+- Remappable shortcut plumbing, touch gestures, i18n scaffolding
 
 ## Architecture
 
@@ -78,10 +124,12 @@ flowchart TB
 ```
 
 ```
+src/app     Qt6 application shell (MainWindow, theme, icons)
 src/core    data model (Volume, SeriesMeta)
-src/io      DICOM scanning + series loading (GDCM via ITK, canonical LPS reorientation)
+src/io      DICOM scanning + series loading (GDCM via ITK, canonical reorientation)
 src/render  VTK/Qt views (SliceViewer, MprWidget, VolumeWidget)
-src/pacs    DICOM networking (DCMTK): query/retrieve + store SCP
+src/db      local study library (SQLite, thumbnails)
+src/pacs    DICOM networking (DCMTK), DICOMweb, nodes, anonymizer, export
 src/seg     DICOM SEG / labelmap -> overlay pipeline
 src/ai      ONNX Runtime inference engine + plugin interface
 plugins/    bundled IAiPlugin implementations
@@ -129,16 +177,21 @@ and drop the DLL into `<bindir>/plugins/`. See `plugins/ThresholdSegPlugin.cpp`
 for a working example. ONNX models can also be loaded directly via
 *AI → Load ONNX Model* (2D NCHW per-slice or 3D NCDHW whole-volume models).
 
-## Roadmap
+## Documentation
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) for the competitive analysis vs
-Horos/OsiriX and the phased plan to beat them.
+- [docs/ROADMAP.md](docs/ROADMAP.md) — competitive analysis vs Horos/OsiriX
+  and the phased plan
+- [docs/TRACKER.md](docs/TRACKER.md) — feature parity tracker
+- [DESIGN.md](DESIGN.md) — design language and UI principles
+- [PRODUCT.md](PRODUCT.md) — product definition and constraints
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to contribute
+- [AGENTS.md](AGENTS.md) — build/verify notes for AI coding agents
 
 ## License
 
-PolyForm Noncommercial 1.0.0 — see [LICENSE](LICENSE). Free for
-personal, research, educational, and non-profit use. Commercial use
-requires a separate license — open an issue to discuss.
+[PolyForm Noncommercial 1.0.0](LICENSE) — free for personal, research,
+educational, and non-profit use. Commercial use requires a separate
+license; open an issue to discuss.
 
 ## Disclaimer
 
