@@ -11,6 +11,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue" alt="License"></a>
+  <a href="https://github.com/8890aman/scanthia/releases/latest"><img src="https://img.shields.io/badge/download-installer-brightgreen" alt="Download"></a>
   <img src="https://img.shields.io/badge/platform-Windows-0078D6" alt="Platform: Windows">
   <img src="https://img.shields.io/badge/C%2B%2B-20-00599C" alt="C++20">
   <img src="https://img.shields.io/badge/status-early%20development-orange" alt="Status">
@@ -145,6 +146,12 @@ plugins/    bundled IAiPlugin implementations
 Volumes are reoriented to canonical axial (identity direction) at load time,
 so index space == display space — this keeps MPR, crosshair and measurement
 math simple and correct.
+
+## Download
+
+Grab the Windows installer from
+[**Releases → Scanthia-Setup.exe**](https://github.com/8890aman/scanthia/releases/latest).
+Installs to `Program Files`, requires admin.
 
 ## Building (Windows / MSYS2 UCRT64)
 
