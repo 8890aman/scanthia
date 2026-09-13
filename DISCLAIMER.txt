@@ -1,0 +1,18 @@
+Scanthia — OPEN-SOURCE RESEARCH SOFTWARE
+
+Scanthia is an open-source DICOM viewing application provided for
+research, development, and educational purposes only.
+
+IT IS NOT A MEDICAL DEVICE. It has not been cleared, approved, or
+certified by the FDA, CE, or any other regulatory body. It has not
+undergone clinical validation.
+
+DO NOT use Scanthia for primary diagnostic interpretation, treatment
+decisions, or any clinical workflow. All image display, measurements,
+segmentations, and AI outputs are unverified and may contain errors.
+
+This software is provided "AS IS", without warranty of any kind. The
+authors and contributors accept no liability for any use of this
+software, including use in a medical context.
+
+By installing or using Scanthia you acknowledge and accept these terms.

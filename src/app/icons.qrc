@@ -1,0 +1,15 @@
+<RCC>
+    <qresource prefix="/">
+        <file>icons/contrast.svg</file>
+        <file>icons/crosshair.svg</file>
+        <file>icons/ruler.svg</file>
+        <file>icons/square-dashed.svg</file>
+        <file>icons/pencil-ruler.svg</file>
+        <file>icons/hand.svg</file>
+        <file>icons/zoom-in.svg</file>
+        <file>icons/paintbrush.svg</file>
+        <file>icons/eraser.svg</file>
+        <file>icons/play.svg</file>
+        <file>icons/Scanthia.png</file>
+    </qresource>
+</RCC>
