@@ -27,10 +27,10 @@
 
 ## Demo
 
-[![Scanthia demo — MPR, 3D volume rendering, PACS, AI segmentation](docs/demo-poster.jpg)](docs/scanthia-demo.mp4)
+![Scanthia — AI segmentation overlay on synchronized MPR](docs/demo.gif)
 
-*4-minute walkthrough: library, MPR + 3D, PACS query/retrieve with Orthanc,
-segmentation, and export. Click to play.*
+*[Full 4-minute walkthrough](docs/scanthia-demo.mp4): library, MPR + 3D,
+PACS query/retrieve with Orthanc, segmentation, and export.*
 
 ## Features
 
