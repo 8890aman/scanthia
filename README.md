@@ -25,6 +25,13 @@
 > has not been cleared by the FDA, CE, or any regulatory body and must not be
 > used for clinical diagnosis. See [DISCLAIMER.txt](DISCLAIMER.txt).
 
+## Demo
+
+[![Scanthia demo — MPR, 3D volume rendering, PACS, AI segmentation](docs/demo-poster.jpg)](docs/scanthia-demo.mp4)
+
+*4-minute walkthrough: library, MPR + 3D, PACS query/retrieve with Orthanc,
+segmentation, and export. Click to play.*
+
 ## Features
 
 **Viewing**
