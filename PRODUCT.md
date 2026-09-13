@@ -55,9 +55,9 @@ present) with a model library; plugin system; screenshot export;
 PACS query/retrieve and a local C-STORE SCP; unsharp-mask sharpening.
 
 Hard constraint confirmed by the owner: performance — native C++/GPU,
-no Electron, no web view. The project is already MIT-licensed open
-source and local-first (no cloud dependency); those are existing
-product facts to preserve.
+no Electron, no web view. The project is source-available under
+PolyForm Noncommercial 1.0.0 and local-first (no cloud dependency);
+those are existing product facts to preserve.
 
 Known gaps vs. incumbents: multiframe/enhanced DICOM and RT objects,
 curved/oblique MPR, hanging protocols beyond basic auto-WL, DICOM PR/SR
@@ -65,8 +65,9 @@ export, structured reporting, and clinical validation.
 
 ## Brand Commitments
 
-Name: Scanthia. MIT-licensed open source. No other binding brand assets
-exist yet — no logo, palette, or type system has been committed.
+Name: Scanthia. Source-available under PolyForm Noncommercial 1.0.0.
+A logo exists at `resources/scanthia.png`; no palette or type system
+has been committed.
 
 ## Evidence on Hand
 

@@ -81,7 +81,9 @@ Horos/OsiriX and the phased plan to beat them.
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE).
+PolyForm Noncommercial 1.0.0 — see [LICENSE](LICENSE). Free for
+personal, research, educational, and non-profit use. Commercial use
+requires a separate license — open an issue to discuss.
 
 ## Disclaimer
 

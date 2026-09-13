@@ -1,7 +1,9 @@
-Scanthia — OPEN-SOURCE RESEARCH SOFTWARE
+Scanthia — NONCOMMERCIAL RESEARCH SOFTWARE
 
-Scanthia is an open-source DICOM viewing application provided for
-research, development, and educational purposes only.
+Scanthia is a source-available DICOM viewing application provided for
+research, development, and educational purposes only. Licensed under
+PolyForm Noncommercial 1.0.0 — commercial use requires a separate
+license from the author.
 
 IT IS NOT A MEDICAL DEVICE. It has not been cleared, approved, or
 certified by the FDA, CE, or any other regulatory body. It has not
