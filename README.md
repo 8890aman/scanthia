@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/8890aman/scanthia/actions/workflows/build.yml"><img src="https://github.com/8890aman/scanthia/actions/workflows/build.yml/badge.svg" alt="Build"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue" alt="License"></a>
   <a href="https://github.com/8890aman/scanthia/releases/latest"><img src="https://img.shields.io/badge/download-installer-brightgreen" alt="Download"></a>
   <img src="https://img.shields.io/badge/platform-Windows-0078D6" alt="Platform: Windows">

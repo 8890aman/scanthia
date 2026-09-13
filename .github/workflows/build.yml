@@ -1,0 +1,60 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-tools
+            mingw-w64-ucrt-x86_64-vtk
+            mingw-w64-ucrt-x86_64-itk
+            mingw-w64-ucrt-x86_64-dcmtk
+            mingw-w64-ucrt-x86_64-gdcm
+            mingw-w64-ucrt-x86_64-onnxruntime
+            mingw-w64-ucrt-x86_64-eigen3
+            mingw-w64-ucrt-x86_64-nlohmann-json
+            mingw-w64-ucrt-x86_64-pugixml
+            mingw-w64-ucrt-x86_64-exprtk
+            mingw-w64-ucrt-x86_64-verdict
+            mingw-w64-ucrt-x86_64-gl2ps
+            mingw-w64-ucrt-x86_64-utf8cpp
+            mingw-w64-ucrt-x86_64-cgns
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-python-pip
+            mingw-w64-ucrt-x86_64-python-numpy
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Unit tests
+        run: ./build/tests/meda_tests.exe
+
+      - name: Pipeline probe (scan -> load -> render -> PNG)
+        run: |
+          python -m pip install pydicom
+          python tests/gen_test_data.py
+          ./build/tests/meda_probe.exe tests/data/ct_series out.png
+          test -f out.png
