@@ -10,6 +10,7 @@ class QTableWidget;
 class QPushButton;
 class QLabel;
 class QComboBox;
+class QProgressBar;
 
 namespace meda {
 
@@ -30,6 +31,9 @@ private:
     PacsNode currentNode() const;
     /// Build a StudyQuery from the current dialog filters.
     StudyQuery currentQuery() const;
+    /// Rows whose checkbox is ticked — the retrieve set.
+    QList<int> checkedRows() const;
+    void updateRetrieveButton();
 
     QLineEdit*   m_host;
     QSpinBox*    m_port;
@@ -47,9 +51,12 @@ private:
     QComboBox*   m_retrieveMethod;
     QTableWidget* m_results;
     QLabel*      m_status;
+    QProgressBar* m_progress;
     QPushButton* m_echoBtn;
     QPushButton* m_queryBtn;
     QPushButton* m_retrieveBtn;
+    QPushButton* m_selectAllBtn;
+    QPushButton* m_clearBtn;
 };
 
 } // namespace meda

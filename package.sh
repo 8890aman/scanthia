@@ -13,6 +13,7 @@ mkdir -p "$PKG/plugins"
 
 cp "$BUILD/src/app/Scanthia.exe" "$PKG/"
 cp DISCLAIMER.txt README.md "$PKG/"
+cp resources/storescp.cfg "$PKG/"
 cp /ucrt64/bin/storescu.exe "$PKG/" 2>/dev/null || true
 
 # Qt runtime + plugins (platforms, styles, imageformats, svg, tls)

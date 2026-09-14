@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -51,6 +52,10 @@ struct StudyQuery {
 /// C-GET study retrieval. Synchronous; call from a worker thread.
 class PacsClient {
 public:
+    /// Progress callback during retrieve: (completed subops, remaining
+    /// subops). Fired on the calling (worker) thread as responses arrive.
+    using RetrieveProgress = std::function<void(int done, int remaining)>;
+
     bool echo(const PacsNode& node, std::string* err = nullptr);
 
     /// Study-root C-FIND. Empty strings act as wildcards.
@@ -79,13 +84,15 @@ public:
     bool retrieveStudyMove(const PacsNode& node,
                            const std::string& studyInstanceUID,
                            const std::string& moveDestAET,
-                           std::string* err = nullptr);
+                           std::string* err = nullptr,
+                           const RetrieveProgress& onProgress = {});
 
     /// C-GET a study; incoming objects are stored to `outDir`.
     bool retrieveStudyGet(const PacsNode& node,
                           const std::string& studyInstanceUID,
                           const std::string& outDir,
-                          std::string* err = nullptr);
+                          std::string* err = nullptr,
+                          const RetrieveProgress& onProgress = {});
 };
 
 } // namespace meda

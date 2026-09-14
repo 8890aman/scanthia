@@ -139,6 +139,35 @@ public:
     }
 };
 
+/// MedaSCU that reports sub-operation counts from each pending
+/// C-MOVE / C-GET response — the basis for a real progress bar.
+class ProgressSCU : public MedaSCU {
+public:
+    PacsClient::RetrieveProgress onProgress;
+
+    OFCondition handleMOVEResponse(const T_ASC_PresentationContextID presID,
+                                   RetrieveResponse* response,
+                                   OFBool& waitForNextResponse) override
+    {
+        if (onProgress && response)
+            onProgress(response->m_numberOfCompletedSubops,
+                       response->m_numberOfRemainingSubops);
+        return DcmSCU::handleMOVEResponse(presID, response,
+                                        waitForNextResponse);
+    }
+
+    OFCondition handleCGETResponse(const T_ASC_PresentationContextID presID,
+                                   RetrieveResponse* response,
+                                   OFBool& continueCGETSession) override
+    {
+        if (onProgress && response)
+            onProgress(response->m_numberOfCompletedSubops,
+                       response->m_numberOfRemainingSubops);
+        return DcmSCU::handleCGETResponse(presID, response,
+                                        continueCGETSession);
+    }
+};
+
 } // namespace
 
 bool PacsClient::echo(const PacsNode& node, std::string* err)
@@ -284,9 +313,11 @@ bool PacsClient::querySeries(const PacsNode& node,
 bool PacsClient::retrieveStudyMove(const PacsNode& node,
                                    const std::string& studyInstanceUID,
                                    const std::string& moveDestAET,
-                                   std::string* err)
+                                   std::string* err,
+                                   const RetrieveProgress& onProgress)
 {
-    MedaSCU scu;
+    ProgressSCU scu;
+    scu.onProgress = onProgress;
     scu.configure(node);
     scu.addPresentationContext(
         UID_MOVEPatientRootQueryRetrieveInformationModel, defaultXfers());
@@ -316,12 +347,14 @@ bool PacsClient::retrieveStudyMove(const PacsNode& node,
 bool PacsClient::retrieveStudyGet(const PacsNode& node,
                                   const std::string& studyInstanceUID,
                                   const std::string& outDir,
-                                  std::string* err)
+                                  std::string* err,
+                                  const RetrieveProgress& onProgress)
 {
     std::error_code ec;
     std::filesystem::create_directories(outDir, ec);
 
-    MedaSCU scu;
+    ProgressSCU scu;
+    scu.onProgress = onProgress;
     scu.configure(node);
     scu.setStorageDir(ofstr(outDir));
     scu.addPresentationContext(
