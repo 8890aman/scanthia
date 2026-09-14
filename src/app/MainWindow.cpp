@@ -2747,9 +2747,12 @@ void MainWindow::sendToNode(const QString& uid, bool wholeStudy)
     args << host->text() << port->text() << stage->path();
     m_statusLabel->setText(tr("Sending %1 file(s) to %2...")
                                .arg(files.size()).arg(host->text()));
+    m_progress->setRange(0, 0);   // storescu gives no per-file progress
+    m_progress->setVisible(true);
     auto* proc = new QProcess(this);
     connect(proc, &QProcess::finished, this,
             [this, proc, stage, n = files.size()](int rc, auto) {
+                m_progress->setVisible(false);
                 m_statusLabel->setText(
                     rc == 0 ? tr("Sent %1 file(s).").arg(n)
                             : tr("Send failed (storescu rc=%1): %2")
