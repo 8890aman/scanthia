@@ -37,6 +37,7 @@
 #include <QLineEdit>
 #include <QMenuBar>
 #include <QMenu>
+#include <QMap>
 #include <QSlider>
 #include <QToolButton>
 #include <QWidgetAction>
@@ -2597,6 +2598,63 @@ void MainWindow::exportSeriesZip(const QString& uid, bool wholeStudy)
         : tr("Export failed (PowerShell Compress-Archive rc=%1)").arg(rc));
 }
 
+// Read (0002,0010) TransferSyntaxUID from the file meta header — always
+// explicit-VR little-endian — so we can ask storescu to propose the stored
+// encoding first. Otherwise the peer may accept the presentation context
+// with an uncompressed TS and storescu fails transcoding compressed data.
+static QString dicomTransferSyntax(const QString& filePath)
+{
+    QFile f(filePath);
+    if (!f.open(QIODevice::ReadOnly))
+        return {};
+    const QByteArray h = f.read(8192);
+    if (h.size() < 140 || h.mid(128, 4) != "DICM")
+        return {};
+    auto u16 = [&](int at) {
+        return quint16(quint8(h[at]) | quint8(h[at + 1]) << 8);
+    };
+    auto u32 = [&](int at) {
+        return quint32(quint8(h[at]) | quint8(h[at + 1]) << 8 |
+                       quint8(h[at + 2]) << 16 | quint8(h[at + 3]) << 24);
+    };
+    for (int pos = 132; pos + 8 <= h.size() && u16(pos) == 0x0002;) {
+        const quint16 elem = u16(pos + 2);
+        const QByteArray vr = h.mid(pos + 4, 2);
+        int len, valAt;
+        if (vr == "OB" || vr == "OW" || vr == "OF" || vr == "SQ" ||
+            vr == "UT" || vr == "UN") {
+            len = int(u32(pos + 8));
+            valAt = pos + 12;
+        } else {
+            len = int(u16(pos + 6));
+            valAt = pos + 8;
+        }
+        if (elem == 0x0010)
+            return QString::fromLatin1(h.mid(valAt, len)).trimmed();
+        pos = valAt + len;
+    }
+    return {};
+}
+
+// Map the stored transfer syntax to the storescu proposal flag that puts
+// it first in the negotiation list.
+static QString storescuTsFlag(const QString& tsUid)
+{
+    static const QMap<QString, QString> flags = {
+        {"1.2.840.10008.1.2.4.50", "-xy"},   // JPEG baseline 8-bit
+        {"1.2.840.10008.1.2.4.51", "-xx"},   // JPEG extended 12-bit
+        {"1.2.840.10008.1.2.4.57", "-xs"},   // JPEG lossless NH
+        {"1.2.840.10008.1.2.4.70", "-xs"},   // JPEG lossless first-order
+        {"1.2.840.10008.1.2.4.80", "-xt"},   // JPEG-LS lossless
+        {"1.2.840.10008.1.2.4.81", "-xu"},   // JPEG-LS lossy
+        {"1.2.840.10008.1.2.4.90", "-xv"},   // JPEG 2000 lossless
+        {"1.2.840.10008.1.2.4.91", "-xw"},   // JPEG 2000 lossy
+        {"1.2.840.10008.1.2.5",   "-xr"},   // RLE lossless
+        {"1.2.840.10008.1.2.1.99","-xd"},   // deflated explicit LE
+    };
+    return flags.value(tsUid);
+}
+
 void MainWindow::sendToNode(const QString& uid, bool wholeStudy)
 {
     const QStringList files = collectFiles(uid, wholeStudy);
@@ -2681,9 +2739,12 @@ void MainWindow::sendToNode(const QString& uid, bool wholeStudy)
                         reinterpret_cast<LPCWSTR>(f.utf16()), nullptr);
     }
 
-    const QStringList args = {
-        "-aet", calling->text(), "-aec", called->text(),
-        "+sd", host->text(), port->text(), stage->path()};
+    QStringList args = {
+        "-aet", calling->text(), "-aec", called->text(), "+sd"};
+    const QString tsFlag = storescuTsFlag(dicomTransferSyntax(files.first()));
+    if (!tsFlag.isEmpty())
+        args << tsFlag;
+    args << host->text() << port->text() << stage->path();
     m_statusLabel->setText(tr("Sending %1 file(s) to %2...")
                                .arg(files.size()).arg(host->text()));
     auto* proc = new QProcess(this);
