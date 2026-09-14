@@ -2683,7 +2683,7 @@ void MainWindow::sendToNode(const QString& uid, bool wholeStudy)
 
     const QStringList args = {
         "-aet", calling->text(), "-aec", called->text(),
-        "+sd", stage->path(), host->text(), port->text()};
+        "+sd", host->text(), port->text(), stage->path()};
     m_statusLabel->setText(tr("Sending %1 file(s) to %2...")
                                .arg(files.size()).arg(host->text()));
     auto* proc = new QProcess(this);
