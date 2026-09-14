@@ -274,13 +274,14 @@ void softmaxInPlace(float* p, int nClass, size_t nVoxels)
     }
 }
 
-/// Tile start positions with 50% overlap. Last tile is clamped back
-/// so the grid exactly covers the dimension.
+/// Tile start positions with ~25% overlap. Last tile is clamped back
+/// so the grid exactly covers the dimension. Gaussian weighting still
+/// blends the overlap smoothly; 25% keeps tile count ~4× lower than 50%.
 std::vector<int> tileStarts(int dim, int tile)
 {
     if (dim <= tile)
         return {0};
-    const int step = std::max(1, tile / 2);
+    const int step = std::max(1, tile * 3 / 4);
     std::vector<int> starts;
     for (int s = 0; s < dim; s += step) {
         if (s + tile >= dim) {
@@ -505,9 +506,9 @@ Segmentation InferenceEngine::runSegmentation(
             const auto cs = tileStarts(vC, W);
             const int totalTiles = ext[2] * int(rs.size() * cs.size());
             int tileNum = 0;
-            int nClass = 1;  // tracked across tiles (fixed for a given model)
+            int nClass = 0;  // unknown until first inference
             for (int k = 0; k < ext[2]; ++k) {
-                std::vector<float> probAcc(nClassMax * vR * vC, 0.f);
+                std::vector<float> probAcc;  // allocated lazily at real nClass
                 std::vector<float> wAcc(vR * vC, 0.f);
                 for (int r0 : rs)
                 for (int c0 : cs) {
@@ -531,6 +532,8 @@ Segmentation InferenceEngine::runSegmentation(
                     const auto os = outs[0].GetTensorTypeAndShapeInfo().GetShape();
                     nClass = int(os.size() > 3 ? os[1] : 1);
                     if (nClass > nClassMax) continue;  // safety
+                    if (probAcc.empty())
+                        probAcc.assign(size_t(nClass) * vR * vC, 0.f);
                     // Softmax in-place so we accumulate probabilities.
                     softmaxInPlace(p, nClass, (size_t)H * W);
                     for (int r = 0; r < H; ++r)
@@ -610,10 +613,10 @@ Segmentation InferenceEngine::runSegmentation(
             const size_t volN = (size_t)ext[2] * ext[1] * ext[0];
             const int totalTiles = int(ks.size() * rs.size() * cs.size());
 
-            // Accumulators — may be large for big volumes.
+            // Accumulators — probAcc is sized to the real class count
+            // once the first tile reports it (avoids a 16× volN alloc).
             std::vector<float> probAcc, wAcc;
-            int nClass = 1;
-            probAcc.resize(nClassMax * volN, 0.f);
+            int nClass = 0;
             wAcc.resize(volN, 0.f);
 
             int tileNum = 0;
@@ -642,6 +645,8 @@ Segmentation InferenceEngine::runSegmentation(
                 const auto os = outs[0].GetTensorTypeAndShapeInfo().GetShape();
                 nClass = int(os.size() > 4 ? os[1] : 1);
                 if (nClass > nClassMax) continue;
+                if (probAcc.empty())
+                    probAcc.assign(size_t(nClass) * volN, 0.f);
                 softmaxInPlace(p, nClass, (size_t)D * H * W);
                 for (int k = 0; k < D; ++k)
                 for (int r = 0; r < H; ++r)
@@ -713,14 +718,14 @@ Segmentation InferenceEngine::runChannelLast3D(
                                static_cast<size_t>(MY),
                                static_cast<size_t>(MZ)};
 
-    // Tile start offsets per axis — 50% overlap for Gaussian blending.
+    // Tile start offsets per axis — ~25% overlap for Gaussian blending.
     std::vector<long> starts[3];
     for (int i = 0; i < 3; ++i) {
         const long rs = long(resSize[i]), ts = long(target[i]);
         if (rs <= ts) {
             starts[i].push_back(0);
         } else {
-            const long step = std::max(1L, ts / 2);
+            const long step = std::max(1L, ts * 3 / 4);
             for (long s = 0; s < rs; s += step) {
                 const long st = std::min(s, rs - ts);
                 if (!starts[i].empty() && starts[i].back() == st)
@@ -743,9 +748,9 @@ Segmentation InferenceEngine::runChannelLast3D(
             padOff[i] = long((target[i] - resSize[i]) / 2);
 
     // Probability + weight accumulators on the resampled grid.
+    // probAcc is sized to the real class count after the first tile.
     const size_t resN = static_cast<size_t>(resSize[0]) * resSize[1] * resSize[2];
     std::vector<float> probAcc, wAcc;
-    probAcc.resize(nClassMax * resN, 0.f);
     wAcc.resize(resN, 0.f);
 
     const float lo  = pp.clipLo;
@@ -815,6 +820,8 @@ Segmentation InferenceEngine::runChannelLast3D(
             outs[0].GetTensorTypeAndShapeInfo().GetShape();
         nClass = int(oshape.back());
         if (nClass > nClassMax) { ++tileNum; continue; }
+        if (probAcc.empty())
+            probAcc.assign(size_t(nClass) * resN, 0.f);
         // Softmax so we accumulate probabilities, not logits.
         // Channel-last layout: [N, X, Y, Z, C] — softmax along last dim.
         for (size_t v = 0; v < n; ++v) {

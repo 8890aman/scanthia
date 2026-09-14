@@ -76,9 +76,15 @@ endif()
 if(WIN32)
     # Locate the real onnxruntime.dll once: Windows searches the app dir
     # before System32, where a stale inbox dll may shadow ours.
+    # Prefer the vendored DirectML build so dev runs use the GPU too.
     find_file(ONNXRUNTIME_DLL NAMES onnxruntime.dll
-              PATHS ${CMAKE_PREFIX_PATH} ENV PATH
-              PATH_SUFFIXES bin)
+              PATHS "${CMAKE_SOURCE_DIR}/thirdparty/onnxruntime-gpu"
+              NO_DEFAULT_PATH)
+    if(NOT ONNXRUNTIME_DLL)
+        find_file(ONNXRUNTIME_DLL NAMES onnxruntime.dll
+                  PATHS ${CMAKE_PREFIX_PATH} ENV PATH
+                  PATH_SUFFIXES bin)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------

@@ -31,4 +31,13 @@ if(WIN32 AND ONNXRUNTIME_DLL)
     add_custom_command(TARGET Scanthia POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${ONNXRUNTIME_DLL}" $<TARGET_FILE_DIR:Scanthia>)
+    # DirectML builds need DirectML.dll + providers_shared alongside.
+    get_filename_component(_ort_dir "${ONNXRUNTIME_DLL}" DIRECTORY)
+    foreach(_dep DirectML.dll onnxruntime_providers_shared.dll)
+        if(EXISTS "${_ort_dir}/${_dep}")
+            add_custom_command(TARGET Scanthia POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_ort_dir}/${_dep}" $<TARGET_FILE_DIR:Scanthia>)
+        endif()
+    endforeach()
 endif()
