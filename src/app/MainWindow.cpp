@@ -884,7 +884,8 @@ void MainWindow::buildMenus()
                            [this, p] { applyPreset(p); });
     view->addSeparator();
     auto* volPresets = view->addMenu(tr("3D Presets"));
-    for (const char* p : {"CT-Soft", "CT-Bone", "CT-Lung", "MIP"})
+    for (const char* p : {"CT-Soft", "CT-Bone", "CT-Lung", "CT-Angio",
+                          "MR-T1", "MR-T2", "MIP"})
         volPresets->addAction(p, this, [this, p] {
             m_mpr->volumeView()->setPreset(p);
         });
