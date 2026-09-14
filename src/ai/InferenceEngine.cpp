@@ -11,6 +11,8 @@
 #include <itkConstantPadImageFilter.h>
 #include <itkRegionOfInterestImageFilter.h>
 #include <itkPasteImageFilter.h>
+#include <itkConnectedComponentImageFilter.h>
+#include <itkRelabelComponentImageFilter.h>
 
 #include <algorithm>
 #include <cmath>
@@ -26,6 +28,9 @@
 namespace meda {
 
 using LabelImage = itk::Image<unsigned char, 3>;
+
+// Maximum classes we can accumulate in the sliding-window buffers.
+static constexpr int nClassMax = 16;
 
 struct InferenceEngine::Impl {
     std::unique_ptr<Ort::Env> env;
@@ -241,7 +246,57 @@ std::vector<float> normalizeSlice(const ImageType::Pointer& img, int k,
 
 namespace {
 
-/// Resample an image to isotropic spacing for model input.
+/// 1D Gaussian weight for position i in a window of size n.
+/// sigma = n/4 is the standard nnU-Net choice.
+float gauss1D(int i, int n)
+{
+    const float sigma = std::max(1.0f, n / 4.0f);
+    const float center = (n - 1) / 2.0f;
+    const float d = static_cast<float>(i) - center;
+    return std::exp(-0.5f * d * d / (sigma * sigma));
+}
+
+/// Apply softmax along the class dimension. p is [nClass, nVoxels].
+void softmaxInPlace(float* p, int nClass, size_t nVoxels)
+{
+    for (size_t v = 0; v < nVoxels; ++v) {
+        float mx = p[v];
+        for (int c = 1; c < nClass; ++c)
+            mx = std::max(mx, p[c * nVoxels + v]);
+        float sum = 0.f;
+        for (int c = 0; c < nClass; ++c) {
+            p[c * nVoxels + v] = std::exp(p[c * nVoxels + v] - mx);
+            sum += p[c * nVoxels + v];
+        }
+        const float inv = 1.f / sum;
+        for (int c = 0; c < nClass; ++c)
+            p[c * nVoxels + v] *= inv;
+    }
+}
+
+/// Tile start positions with 50% overlap. Last tile is clamped back
+/// so the grid exactly covers the dimension.
+std::vector<int> tileStarts(int dim, int tile)
+{
+    if (dim <= tile)
+        return {0};
+    const int step = std::max(1, tile / 2);
+    std::vector<int> starts;
+    for (int s = 0; s < dim; s += step) {
+        if (s + tile >= dim) {
+            const int last = dim - tile;
+            if (starts.empty() || starts.back() != last)
+                starts.push_back(last);
+            break;
+        }
+        starts.push_back(s);
+    }
+    return starts;
+}
+
+} // namespace
+
+namespace {
 ImageType::Pointer resampleIso(const ImageType::Pointer& img, double spacing)
 {
     using Filter = itk::ResampleImageFilter<ImageType, ImageType>;
@@ -329,6 +384,51 @@ ImageType::Pointer fitToSize(const ImageType::Pointer& img,
 
 } // namespace
 
+namespace {
+
+/// Remove small connected components per label. Processes each label
+/// value independently so multi-class segmentations are cleaned without
+/// merging different structures.
+using CCImage = itk::Image<unsigned int, 3>;
+void removeSmallComponents(LabelImage::Pointer label, unsigned int minSize)
+{
+    itk::ImageRegionIterator<LabelImage> it(label,
+        label->GetLargestPossibleRegion());
+    unsigned char maxLbl = 0;
+    for (it.GoToBegin(); !it.IsAtEnd(); ++it)
+        maxLbl = std::max(maxLbl, it.Get());
+    if (maxLbl == 0) return;
+
+    for (unsigned char lbl = 1; lbl <= maxLbl; ++lbl) {
+        auto mask = LabelImage::New();
+        mask->SetRegions(label->GetLargestPossibleRegion());
+        mask->CopyInformation(label);
+        mask->Allocate();
+        mask->FillBuffer(0);
+        for (it.GoToBegin(); !it.IsAtEnd(); ++it)
+            mask->SetPixel(it.GetIndex(), it.Get() == lbl ? 1 : 0);
+
+        auto cc = itk::ConnectedComponentImageFilter<LabelImage,
+                                                      CCImage>::New();
+        cc->SetInput(mask);
+        auto relabel = itk::RelabelComponentImageFilter<CCImage,
+                                                         CCImage>::New();
+        relabel->SetInput(cc->GetOutput());
+        relabel->SetMinimumObjectSize(minSize);
+        relabel->Update();
+
+        auto* out = relabel->GetOutput();
+        itk::ImageRegionConstIterator<CCImage> oIt(out,
+            out->GetLargestPossibleRegion());
+        for (oIt.GoToBegin(), it.GoToBegin(); !oIt.IsAtEnd(); ++oIt, ++it) {
+            if (it.Get() == lbl && oIt.Get() == 0)
+                it.Set(0);
+        }
+    }
+}
+
+} // namespace
+
 Segmentation InferenceEngine::runSegmentation(
     const VolumePtr& ref, std::function<void(int, int)> progress)
 {
@@ -346,16 +446,19 @@ Segmentation InferenceEngine::runSegmentation(
         return runChannelLast3D(ref, shape, std::move(progress));
     }
 
-    auto ext = ref->extent();
+    const auto ext = ref->extent();
+    const auto img = ref->itkImage();
+    const auto range = ref->scalarRange();
+    const float lo = (float)range[0];
+    const float rng = std::max(1e-6f, (float)range[1] - lo);
+
     LabelImage::Pointer label = LabelImage::New();
-    label->SetRegions(ref->itkImage()->GetLargestPossibleRegion());
-    label->SetSpacing(ref->itkImage()->GetSpacing());
-    label->SetOrigin(ref->itkImage()->GetOrigin());
-    label->SetDirection(ref->itkImage()->GetDirection());
+    label->SetRegions(img->GetLargestPossibleRegion());
+    label->SetSpacing(img->GetSpacing());
+    label->SetOrigin(img->GetOrigin());
+    label->SetDirection(img->GetDirection());
     label->Allocate();
     label->FillBuffer(0);
-
-    auto range = ref->scalarRange();
 
     Ort::MemoryInfo memInfo =
         Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
@@ -365,91 +468,216 @@ Segmentation InferenceEngine::runSegmentation(
     int maxLabel = 0;
 
     if (shape.size() == 4) {
-        // 2D model: input [1,1,H,W], run per axial slice.
-        // Non-positive dims are dynamic — use the actual slice size.
-        const int64_t H = shape[2] > 0 ? shape[2] : ext[1];
-        const int64_t W = shape[3] > 0 ? shape[3] : ext[0];
-        if (H != ext[1] || W != ext[0])
-            throw std::runtime_error(
-                "Model input " + std::to_string(W) + "x" +
-                std::to_string(H) + " does not match volume slice " +
-                std::to_string(ext[0]) + "x" + std::to_string(ext[1]) +
-                " (resize not yet implemented)");
+        // ---- 2D model: [1,1,H,W] ----
+        const int H = int(shape[2] > 0 ? shape[2] : ext[1]);
+        const int W = int(shape[3] > 0 ? shape[3] : ext[0]);
+        const int vR = ext[1], vC = ext[0];   // volume rows / cols
         std::vector<int64_t> dims{1, 1, H, W};
-        for (int k = 0; k < ext[2]; ++k) {
-            auto data = normalizeSlice(ref->itkImage(), k, ext[1], ext[0],
-                                       (float)range[0], (float)range[1]);
-            auto inTensor = Ort::Value::CreateTensor<float>(
-                memInfo, data.data(), data.size(), dims.data(), 4);
-            auto outs = m_impl->session->Run(
-                Ort::RunOptions{nullptr}, inNames, &inTensor, 1, outNames, 1);
-            float* p = outs[0].GetTensorMutableData<float>();
-            auto oshape =
-                outs[0].GetTensorTypeAndShapeInfo().GetShape();
-            const int64_t nClass = oshape.size() > 3 ? oshape[1] : 1;
-            for (int r = 0; r < ext[1]; ++r)
-                for (int c = 0; c < ext[0]; ++c) {
-                    const size_t base = (size_t)r * ext[0] + c;
-                    int best = 0;
-                    float bestV = p[base];
-                    for (int64_t cls = 1; cls < nClass; ++cls) {
-                        float v = p[cls * ext[0] * ext[1] + base];
-                        if (v > bestV) { bestV = v; best = (int)cls; }
+
+        if (H == vR && W == vC) {
+            // Fast path: slice matches model input exactly.
+            for (int k = 0; k < ext[2]; ++k) {
+                auto data = normalizeSlice(img, k, vR, vC, lo, (float)range[1]);
+                auto inT = Ort::Value::CreateTensor<float>(
+                    memInfo, data.data(), data.size(), dims.data(), 4);
+                auto outs = m_impl->session->Run(
+                    Ort::RunOptions{nullptr}, inNames, &inT, 1, outNames, 1);
+                float* p = outs[0].GetTensorMutableData<float>();
+                const auto os = outs[0].GetTensorTypeAndShapeInfo().GetShape();
+                const int nClass = int(os.size() > 3 ? os[1] : 1);
+                for (int r = 0; r < vR; ++r)
+                    for (int c = 0; c < vC; ++c) {
+                        const size_t b = (size_t)r * vC + c;
+                        int best = 0; float bv = p[b];
+                        for (int cl = 1; cl < nClass; ++cl) {
+                            float v = p[cl * vR * vC + b];
+                            if (v > bv) { bv = v; best = cl; }
+                        }
+                        if (nClass == 1) best = bv > 0.5f ? 1 : 0;
+                        label->SetPixel({{c, r, k}}, (unsigned char)best);
+                        maxLabel = std::max(maxLabel, best);
                     }
-                    if (nClass == 1)
-                        best = bestV > 0.5f ? 1 : 0;
-                    ImageType::IndexType idx{{c, r, k}};
-                    label->SetPixel(idx, (unsigned char)best);
+                if (progress) progress(k + 1, ext[2]);
+            }
+        } else {
+            // Sliding window with Gaussian-weighted overlap.
+            const auto rs = tileStarts(vR, H);
+            const auto cs = tileStarts(vC, W);
+            const int totalTiles = ext[2] * int(rs.size() * cs.size());
+            int tileNum = 0;
+            int nClass = 1;  // tracked across tiles (fixed for a given model)
+            for (int k = 0; k < ext[2]; ++k) {
+                std::vector<float> probAcc(nClassMax * vR * vC, 0.f);
+                std::vector<float> wAcc(vR * vC, 0.f);
+                for (int r0 : rs)
+                for (int c0 : cs) {
+                    std::vector<float> data(H * W);
+                    for (int r = 0; r < H; ++r)
+                    for (int c = 0; c < W; ++c) {
+                        int gr = r0 + r, gc = c0 + c;
+                        float v;
+                        if (gr < vR && gc < vC) {
+                            v = img->GetPixel({{gc, gr, k}});
+                        } else {
+                            v = lo;
+                        }
+                        data[r * W + c] = std::clamp((v - lo) / rng, 0.f, 1.f);
+                    }
+                    auto inT = Ort::Value::CreateTensor<float>(
+                        memInfo, data.data(), data.size(), dims.data(), 4);
+                    auto outs = m_impl->session->Run(
+                        Ort::RunOptions{nullptr}, inNames, &inT, 1, outNames, 1);
+                    float* p = outs[0].GetTensorMutableData<float>();
+                    const auto os = outs[0].GetTensorTypeAndShapeInfo().GetShape();
+                    nClass = int(os.size() > 3 ? os[1] : 1);
+                    if (nClass > nClassMax) continue;  // safety
+                    // Softmax in-place so we accumulate probabilities.
+                    softmaxInPlace(p, nClass, (size_t)H * W);
+                    for (int r = 0; r < H; ++r)
+                    for (int c = 0; c < W; ++c) {
+                        int gr = r0 + r, gc = c0 + c;
+                        if (gr >= vR || gc >= vC) continue;
+                        const float w = gauss1D(r, H) * gauss1D(c, W);
+                        const size_t tb = (size_t)r * W + c;
+                        const size_t gb = (size_t)gr * vC + gc;
+                        for (int cl = 0; cl < nClass; ++cl)
+                            probAcc[cl * vR * vC + gb] += p[cl * H * W + tb] * w;
+                        wAcc[gb] += w;
+                    }
+                    ++tileNum;
+                    if (progress) progress(tileNum, totalTiles);
+                }
+                // Argmax of accumulated weighted probabilities.
+                for (int r = 0; r < vR; ++r)
+                for (int c = 0; c < vC; ++c) {
+                    const size_t gb = (size_t)r * vC + c;
+                    if (wAcc[gb] < 1e-6f) continue;
+                    int best = 0; float bv = probAcc[gb] / wAcc[gb];
+                    for (int cl = 1; cl < nClass; ++cl) {
+                        float v = probAcc[cl * vR * vC + gb] / wAcc[gb];
+                        if (v > bv) { bv = v; best = cl; }
+                    }
+                    if (nClass == 1) best = bv > 0.5f ? 1 : 0;
+                    label->SetPixel({{c, r, k}}, (unsigned char)best);
                     maxLabel = std::max(maxLabel, best);
                 }
+            }
         }
     } else {
-        // 3D model: [1,1,D,H,W] matching the full volume.
-        const int64_t D = shape[2] > 0 ? shape[2] : ext[2];
-        const int64_t H = shape[3] > 0 ? shape[3] : ext[1];
-        const int64_t W = shape[4] > 0 ? shape[4] : ext[0];
-        if (D != ext[2] || H != ext[1] || W != ext[0])
-            throw std::runtime_error(
-                "3D model input does not match volume dimensions");
-        const size_t n = (size_t)D * H * W;
-        std::vector<float> data(n);
-        const float lo = (float)range[0];
-        const float rng = std::max(1e-6f, (float)range[1] - lo);
-        size_t i = 0;
-        for (int k = 0; k < D; ++k)
-            for (int r = 0; r < H; ++r)
-                for (int c = 0; c < W; ++c, ++i) {
-                    ImageType::IndexType idx{{c, r, k}};
-                    data[i] = std::clamp(
-                        (ref->itkImage()->GetPixel(idx) - lo) / rng,
-                        0.0f, 1.0f);
-                }
+        // ---- 3D model: [1,1,D,H,W] ----
+        const int D = int(shape[2] > 0 ? shape[2] : ext[2]);
+        const int H = int(shape[3] > 0 ? shape[3] : ext[1]);
+        const int W = int(shape[4] > 0 ? shape[4] : ext[0]);
         std::vector<int64_t> dims{1, 1, D, H, W};
-        auto inTensor = Ort::Value::CreateTensor<float>(
-            memInfo, data.data(), data.size(), dims.data(), 5);
-        auto outs = m_impl->session->Run(
-            Ort::RunOptions{nullptr}, inNames, &inTensor, 1, outNames, 1);
-        float* p = outs[0].GetTensorMutableData<float>();
-        auto oshape = outs[0].GetTensorTypeAndShapeInfo().GetShape();
-        const int64_t nClass = oshape.size() > 4 ? oshape[1] : 1;
-        for (size_t v = 0; v < n; ++v) {
-            int best = 0;
-            float bestV = p[v];
-            for (int64_t cls = 1; cls < nClass; ++cls) {
-                float val = p[cls * n + v];
-                if (val > bestV) { bestV = val; best = (int)cls; }
+
+        if (D == ext[2] && H == ext[1] && W == ext[0]) {
+            // Fast path: volume matches model input exactly.
+            const size_t n = (size_t)D * H * W;
+            std::vector<float> data(n);
+            size_t i = 0;
+            for (int k = 0; k < D; ++k)
+            for (int r = 0; r < H; ++r)
+            for (int c = 0; c < W; ++c, ++i)
+                data[i] = std::clamp(
+                    (img->GetPixel({{c, r, k}}) - lo) / rng, 0.0f, 1.0f);
+            auto inT = Ort::Value::CreateTensor<float>(
+                memInfo, data.data(), data.size(), dims.data(), 5);
+            auto outs = m_impl->session->Run(
+                Ort::RunOptions{nullptr}, inNames, &inT, 1, outNames, 1);
+            float* p = outs[0].GetTensorMutableData<float>();
+            const auto os = outs[0].GetTensorTypeAndShapeInfo().GetShape();
+            const int nClass = int(os.size() > 4 ? os[1] : 1);
+            for (size_t v = 0; v < n; ++v) {
+                int best = 0; float bv = p[v];
+                for (int cl = 1; cl < nClass; ++cl) {
+                    float val = p[cl * n + v];
+                    if (val > bv) { bv = val; best = cl; }
+                }
+                if (nClass == 1) best = bv > 0.5f ? 1 : 0;
+                const int k = int(v / ((size_t)W * H));
+                const int rem = int(v % ((size_t)W * H));
+                const int r = rem / W;
+                const int c = rem % W;
+                label->SetPixel({{c, r, k}}, (unsigned char)best);
+                maxLabel = std::max(maxLabel, best);
             }
-            if (nClass == 1)
-                best = bestV > 0.5f ? 1 : 0;
-            const int k = (int)(v / ((size_t)W * H));
-            const int rem = (int)(v % ((size_t)W * H));
-            const int r = rem / (int)W;
-            const int c = rem % (int)W;
-            ImageType::IndexType idx{{c, r, k}};
-            label->SetPixel(idx, (unsigned char)best);
-            maxLabel = std::max(maxLabel, best);
+            if (progress) progress(1, 1);
+        } else {
+            // 3D sliding window with Gaussian-weighted overlap.
+            const auto ks = tileStarts(ext[2], D);
+            const auto rs = tileStarts(ext[1], H);
+            const auto cs = tileStarts(ext[0], W);
+            const size_t volN = (size_t)ext[2] * ext[1] * ext[0];
+            const int totalTiles = int(ks.size() * rs.size() * cs.size());
+
+            // Accumulators — may be large for big volumes.
+            std::vector<float> probAcc, wAcc;
+            int nClass = 1;
+            probAcc.resize(nClassMax * volN, 0.f);
+            wAcc.resize(volN, 0.f);
+
+            int tileNum = 0;
+            for (int k0 : ks)
+            for (int r0 : rs)
+            for (int c0 : cs) {
+                std::vector<float> data((size_t)D * H * W);
+                size_t i = 0;
+                for (int k = 0; k < D; ++k)
+                for (int r = 0; r < H; ++r)
+                for (int c = 0; c < W; ++c, ++i) {
+                    int gk = k0 + k, gr = r0 + r, gc = c0 + c;
+                    float v;
+                    if (gk < ext[2] && gr < ext[1] && gc < ext[0]) {
+                        v = img->GetPixel({{gc, gr, gk}});
+                    } else {
+                        v = lo;
+                    }
+                    data[i] = std::clamp((v - lo) / rng, 0.f, 1.f);
+                }
+                auto inT = Ort::Value::CreateTensor<float>(
+                    memInfo, data.data(), data.size(), dims.data(), 5);
+                auto outs = m_impl->session->Run(
+                    Ort::RunOptions{nullptr}, inNames, &inT, 1, outNames, 1);
+                float* p = outs[0].GetTensorMutableData<float>();
+                const auto os = outs[0].GetTensorTypeAndShapeInfo().GetShape();
+                nClass = int(os.size() > 4 ? os[1] : 1);
+                if (nClass > nClassMax) continue;
+                softmaxInPlace(p, nClass, (size_t)D * H * W);
+                for (int k = 0; k < D; ++k)
+                for (int r = 0; r < H; ++r)
+                for (int c = 0; c < W; ++c) {
+                    int gk = k0 + k, gr = r0 + r, gc = c0 + c;
+                    if (gk >= ext[2] || gr >= ext[1] || gc >= ext[0]) continue;
+                    const float w = gauss1D(k, D) * gauss1D(r, H) * gauss1D(c, W);
+                    const size_t tb = (size_t)k * H * W + r * W + c;
+                    const size_t gb = (size_t)gk * ext[1] * ext[0] + gr * ext[0] + gc;
+                    for (int cl = 0; cl < nClass; ++cl)
+                        probAcc[cl * volN + gb] += p[cl * D * H * W + tb] * w;
+                    wAcc[gb] += w;
+                }
+                ++tileNum;
+                if (progress) progress(tileNum, totalTiles);
+            }
+            // Argmax of accumulated weighted probabilities.
+            for (int k = 0; k < ext[2]; ++k)
+            for (int r = 0; r < ext[1]; ++r)
+            for (int c = 0; c < ext[0]; ++c) {
+                const size_t gb = (size_t)k * ext[1] * ext[0] + r * ext[0] + c;
+                if (wAcc[gb] < 1e-6f) continue;
+                int best = 0; float bv = probAcc[gb] / wAcc[gb];
+                for (int cl = 1; cl < nClass; ++cl) {
+                    float v = probAcc[cl * volN + gb] / wAcc[gb];
+                    if (v > bv) { bv = v; best = cl; }
+                }
+                if (nClass == 1) best = bv > 0.5f ? 1 : 0;
+                label->SetPixel({{c, r, k}}, (unsigned char)best);
+                maxLabel = std::max(maxLabel, best);
+            }
         }
     }
+
+    // Connected-component cleanup: remove speckle (< 50 voxels).
+    removeSmallComponents(label, 50);
 
     auto connector = itk::ImageToVTKImageFilter<LabelImage>::New();
     connector->SetInput(label);
@@ -485,15 +713,15 @@ Segmentation InferenceEngine::runChannelLast3D(
                                static_cast<size_t>(MY),
                                static_cast<size_t>(MZ)};
 
-    // Tile start offsets per axis — non-overlapping, last tile clamped
-    // back so the grid exactly covers the volume.
+    // Tile start offsets per axis — 50% overlap for Gaussian blending.
     std::vector<long> starts[3];
     for (int i = 0; i < 3; ++i) {
         const long rs = long(resSize[i]), ts = long(target[i]);
         if (rs <= ts) {
             starts[i].push_back(0);
         } else {
-            for (long s = 0; s < rs; s += ts) {
+            const long step = std::max(1L, ts / 2);
+            for (long s = 0; s < rs; s += step) {
                 const long st = std::min(s, rs - ts);
                 if (!starts[i].empty() && starts[i].back() == st)
                     break;
@@ -514,15 +742,11 @@ Segmentation InferenceEngine::runChannelLast3D(
         if (resSize[i] < target[i])
             padOff[i] = long((target[i] - resSize[i]) / 2);
 
-    // Label volume on the resampled grid — results accumulate here.
-    auto labRes = LabelImage::New();
-    labRes->SetRegions(ImageType::RegionType{
-        ImageType::IndexType{{0, 0, 0}}, resSize});
-    labRes->SetSpacing(resampled->GetSpacing());
-    labRes->SetOrigin(resampled->GetOrigin());
-    labRes->SetDirection(resampled->GetDirection());
-    labRes->Allocate();
-    labRes->FillBuffer(0);
+    // Probability + weight accumulators on the resampled grid.
+    const size_t resN = static_cast<size_t>(resSize[0]) * resSize[1] * resSize[2];
+    std::vector<float> probAcc, wAcc;
+    probAcc.resize(nClassMax * resN, 0.f);
+    wAcc.resize(resN, 0.f);
 
     const float lo  = pp.clipLo;
     const float rng = std::max(1e-6f, pp.clipHi - pp.clipLo);
@@ -535,6 +759,7 @@ Segmentation InferenceEngine::runChannelLast3D(
     const char* outNames[] = {m_impl->outputName.c_str()};
 
     int maxLabel = 0;
+    int nClass = 1;
     int tileNum = 0;
     for (long sx : starts[0])
     for (long sy : starts[1])
@@ -585,42 +810,81 @@ Segmentation InferenceEngine::runChannelLast3D(
         auto outs = m_impl->session->Run(
             Ort::RunOptions{nullptr}, inNames, &inTensor, 1,
             outNames, 1);
-        const float* p = outs[0].GetTensorData<float>();
+        float* p = outs[0].GetTensorMutableData<float>();
         const auto oshape =
             outs[0].GetTensorTypeAndShapeInfo().GetShape();
-        const int64_t nClass = oshape.back();
+        nClass = int(oshape.back());
+        if (nClass > nClassMax) { ++tileNum; continue; }
+        // Softmax so we accumulate probabilities, not logits.
+        // Channel-last layout: [N, X, Y, Z, C] — softmax along last dim.
+        for (size_t v = 0; v < n; ++v) {
+            float mx = p[v * nClass];
+            for (int c = 1; c < nClass; ++c)
+                mx = std::max(mx, p[v * nClass + c]);
+            float sum = 0.f;
+            for (int c = 0; c < nClass; ++c) {
+                p[v * nClass + c] = std::exp(p[v * nClass + c] - mx);
+                sum += p[v * nClass + c];
+            }
+            const float inv = 1.f / sum;
+            for (int c = 0; c < nClass; ++c)
+                p[v * nClass + c] *= inv;
+        }
 
-        // Argmax → write into labRes at the tile offset (only voxels
-        // that fall inside the resampled volume — padding is dropped).
+        // Accumulate weighted probabilities into the resampled grid.
         t = 0;
         for (int64_t x = 0; x < MX; ++x)
             for (int64_t y = 0; y < MY; ++y)
                 for (int64_t z = 0; z < MZ; ++z, ++t) {
-                    int best = 0;
-                    float bestV = p[t * nClass];
-                    for (int64_t c = 1; c < nClass; ++c)
-                        if (p[t * nClass + c] > bestV) {
-                            bestV = p[t * nClass + c];
-                            best = int(c);
-                        }
-                    if (best != 0) {
-                        const long gi[3] = {sx + x - padOff[0],
-                                            sy + y - padOff[1],
-                                            sz + z - padOff[2]};
-                        if (gi[0] >= 0 && gi[0] < long(resSize[0]) &&
-                            gi[1] >= 0 && gi[1] < long(resSize[1]) &&
-                            gi[2] >= 0 && gi[2] < long(resSize[2]))
-                            labRes->SetPixel(
-                                LabelImage::IndexType{{gi[0], gi[1],
-                                                       gi[2]}},
-                                static_cast<unsigned char>(best));
-                    }
-                    maxLabel = std::max(maxLabel, best);
+                    const long gi[3] = {static_cast<long>(sx + x - padOff[0]),
+                                        static_cast<long>(sy + y - padOff[1]),
+                                        static_cast<long>(sz + z - padOff[2])};
+                    if (gi[0] < 0 || gi[0] >= long(resSize[0]) ||
+                        gi[1] < 0 || gi[1] >= long(resSize[1]) ||
+                        gi[2] < 0 || gi[2] >= long(resSize[2]))
+                        continue;
+                    const float w = gauss1D(int(x), int(MX)) *
+                                   gauss1D(int(y), int(MY)) *
+                                   gauss1D(int(z), int(MZ));
+                    const size_t gb = static_cast<size_t>(gi[0]) +
+                        static_cast<size_t>(gi[1]) * resSize[0] +
+                        static_cast<size_t>(gi[2]) * resSize[0] * resSize[1];
+                    for (int c = 0; c < nClass; ++c)
+                        probAcc[c * resN + gb] += p[t * nClass + c] * w;
+                    wAcc[gb] += w;
+                    maxLabel = std::max(maxLabel, nClass - 1);
                 }
         ++tileNum;
         if (progress)
             progress(tileNum, totalTiles);
     }
+
+    // Argmax of accumulated weighted probabilities → label volume.
+    auto labRes = LabelImage::New();
+    labRes->SetRegions(ImageType::RegionType{
+        ImageType::IndexType{{0, 0, 0}}, resSize});
+    labRes->SetSpacing(resampled->GetSpacing());
+    labRes->SetOrigin(resampled->GetOrigin());
+    labRes->SetDirection(resampled->GetDirection());
+    labRes->Allocate();
+    labRes->FillBuffer(0);
+    for (size_t z = 0; z < resSize[2]; ++z)
+    for (size_t y = 0; y < resSize[1]; ++y)
+    for (size_t x = 0; x < resSize[0]; ++x) {
+        const size_t gb = x + y * resSize[0] + z * resSize[0] * resSize[1];
+        if (wAcc[gb] < 1e-6f) continue;
+        int best = 0; float bv = probAcc[gb] / wAcc[gb];
+        for (int c = 1; c < nClass; ++c) {
+            float v = probAcc[c * resN + gb] / wAcc[gb];
+            if (v > bv) { bv = v; best = c; }
+        }
+        if (nClass == 1) best = bv > 0.5f ? 1 : 0;
+        labRes->SetPixel(LabelImage::IndexType{{long(x), long(y), long(z)}},
+                         static_cast<unsigned char>(best));
+    }
+
+    // Connected-component cleanup on the resampled grid.
+    removeSmallComponents(labRes, 50);
 
     // Resample labels back onto the original volume grid.
     using LResample = itk::ResampleImageFilter<LabelImage, LabelImage>;
