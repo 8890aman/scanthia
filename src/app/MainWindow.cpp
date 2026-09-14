@@ -148,39 +148,48 @@ public:
     RailButton(const QString& text, QWidget* parent = nullptr)
         : QToolButton(parent), m_text(text)
     {
-        setFixedWidth(24);
+        setFixedWidth(32);
         setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
         setCursor(Qt::PointingHandCursor);
+        setStyleSheet(
+            "QToolButton {"
+            "    background: #1A1E24;"
+            "    border-left: 2px solid #4DA3E8;"
+            "    border-radius: 0;"
+            "}"
+            "QToolButton:hover {"
+            "    background: #252B33;"
+            "    border-left-color: #5EB3F8;"
+            "}");
     }
 protected:
     void paintEvent(QPaintEvent*) override
     {
         QPainter p(this);
-        // Rail face — instrument ground with a bezel hairline on the
-        // dock-facing edge.
+        // Rail face — instrument ground with accent edge.
         p.fillRect(rect(), QColor(0x1A, 0x1E, 0x24));
-        p.setPen(QColor(0x2E, 0x35, 0x40));
-        p.drawLine(rect().topRight(), rect().bottomRight());
         if (underMouse())
-            p.fillRect(rect(), QColor(0x3D, 0x47, 0x50, 60));
+            p.fillRect(rect(), QColor(0x3D, 0x47, 0x50, 80));
         // Rotated label.
         p.save();
-        p.translate(width() / 2.0 + 3, height() / 2.0);
+        p.translate(width() / 2.0 + 4, height() / 2.0);
         p.rotate(-90);
         QFont f = font();
         f.setPointSize(8);
         f.setWeight(QFont::DemiBold);
         p.setFont(f);
-        p.setPen(QColor(0x8E, 0x99, 0xA6));
+        p.setPen(underMouse() ? QColor(0xDC, 0xE2, 0xE9)
+                              : QColor(0x8E, 0x99, 0xA6));
         p.drawText(QRect(-height() / 2, -10, height(), 20),
                    Qt::AlignCenter, m_text);
         p.restore();
         // Chevron at the top pointing inward (expand direction).
-        p.setPen(QPen(QColor(0x4D, 0xA3, 0xE8), 1.6,
-                      Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setPen(QPen(underMouse() ? QColor(0x5E, 0xB3, 0xF8)
+                                  : QColor(0x4D, 0xA3, 0xE8),
+                      2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         const double mx = width() / 2.0;
-        p.drawLine(QPointF(mx + 2, 6), QPointF(mx - 2, 10));
-        p.drawLine(QPointF(mx - 2, 10), QPointF(mx + 2, 14));
+        p.drawLine(QPointF(mx + 3, 8), QPointF(mx - 3, 12));
+        p.drawLine(QPointF(mx - 3, 12), QPointF(mx + 3, 16));
     }
 private:
     QString m_text;
@@ -2012,19 +2021,32 @@ void MainWindow::populateSegPanel()
         // swaps the panel for a slim rail — one click brings it back.
         auto* tbar = new QWidget(m_segDock);
         auto* tbl = new QHBoxLayout(tbar);
-        tbl->setContentsMargins(8, 2, 2, 2);
-        tbl->setSpacing(4);
+        tbl->setContentsMargins(8, 4, 4, 4);
+        tbl->setSpacing(6);
         auto* ttl = new QLabel(tr("AI RESULTS"), tbar);
         ttl->setStyleSheet(
-            "color: #8E99A6; font-size: 10px; font-weight: 600;");
+            "color: #8E99A6; font-size: 10px; font-weight: 600;"
+            "letter-spacing: 0.8px;");
         auto* collapseBtn = new QToolButton(tbar);
-        collapseBtn->setIcon(makeChevronIcon(true, QColor(0x8E,0x99,0xA6)));
-        collapseBtn->setIconSize({12, 12});
-        collapseBtn->setFixedSize(22, 22);
+        collapseBtn->setIcon(makeChevronIcon(true, QColor(0x8E,0x99,0xA6), 14));
+        collapseBtn->setIconSize({14, 14});
+        collapseBtn->setFixedSize(28, 28);
         collapseBtn->setToolTip(tr("Collapse AI Results"));
+        collapseBtn->setCursor(Qt::PointingHandCursor);
         collapseBtn->setStyleSheet(
-            "QToolButton { background: transparent; border: none; }"
-            "QToolButton:hover { background: #3D4750; }");
+            "QToolButton {"
+            "    background: #1A1E24;"
+            "    border: 1px solid #2E3540;"
+            "    border-radius: 4px;"
+            "    padding: 4px;"
+            "}"
+            "QToolButton:hover {"
+            "    background: #3D4750;"
+            "    border-color: #4DA3E8;"
+            "}"
+            "QToolButton:pressed {"
+            "    background: #2E3540;"
+            "}");
         tbl->addWidget(ttl);
         tbl->addStretch();
         tbl->addWidget(collapseBtn);
@@ -2033,12 +2055,17 @@ void MainWindow::populateSegPanel()
         m_segRail = new RailButton(tr("AI RESULTS"), m_segDock);
         m_segRail->setToolTip(tr("Expand AI Results"));
 
+        // Collapse: swap to rail + constrain dock to rail width.
         connect(collapseBtn, &QToolButton::clicked, this, [this] {
             m_segDock->setWidget(m_segRail);
+            m_segDock->setFixedWidth(m_segRail->sizeHint().width());
             m_segRail->show();
         });
+        // Expand: restore panel + clear width constraint.
         connect(m_segRail, &QToolButton::clicked, this, [this] {
             m_segDock->setWidget(m_segPanel);
+            m_segDock->setMinimumWidth(0);
+            m_segDock->setMaximumWidth(QWIDGETSIZE_MAX);
             m_segPanel->show();
         });
 
@@ -2051,6 +2078,8 @@ void MainWindow::populateSegPanel()
                     // even if it was collapsed to the rail.
                     if (v && m_segDock->widget() == m_segRail) {
                         m_segDock->setWidget(m_segPanel);
+                        m_segDock->setMinimumWidth(0);
+                        m_segDock->setMaximumWidth(QWIDGETSIZE_MAX);
                         m_segPanel->show();
                     }
                 });
