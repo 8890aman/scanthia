@@ -85,9 +85,11 @@ void SliceInteractionStyle::OnLeftButtonDown()
     switch (m_tool) {
     case Tool::Pan:
         this->StartPan();
+        if (onInteractionBegin) onInteractionBegin();
         break;
     case Tool::Zoom:
         this->StartDolly();
+        if (onInteractionBegin) onInteractionBegin();
         break;
     case Tool::Crosshair:
         if (pickPoint && onPointPicked)
@@ -150,8 +152,14 @@ void SliceInteractionStyle::OnLeftButtonUp()
     }
 
     switch (m_tool) {
-    case Tool::Pan:    this->EndPan();   break;
-    case Tool::Zoom:   this->EndDolly(); break;
+    case Tool::Pan:
+        this->EndPan();
+        if (onInteractionEnd) onInteractionEnd();
+        break;
+    case Tool::Zoom:
+        this->EndDolly();
+        if (onInteractionEnd) onInteractionEnd();
+        break;
     case Tool::Measure:
         if (m_measuring) {
             m_measuring = false;
@@ -190,12 +198,14 @@ void SliceInteractionStyle::OnRightButtonDown()
     m_rightPressPos[1] = pos[1];
     this->GrabFocus(this->EventCallbackCommand);
     this->StartPan();
+    if (onInteractionBegin) onInteractionBegin();
 }
 
 void SliceInteractionStyle::OnRightButtonUp()
 {
     this->EndPan();
     this->ReleaseFocus();
+    if (onInteractionEnd) onInteractionEnd();
     // A right click without a drag deselects the active tool.
     const int* pos = this->Interactor->GetEventPosition();
     const int dx = pos[0] - m_rightPressPos[0];

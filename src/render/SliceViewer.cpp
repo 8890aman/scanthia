@@ -214,9 +214,11 @@ SliceViewer::SliceViewer(QWidget* parent)
         windowLevel(w, c);
         updateCornerText();
         emit windowLevelChanged(w, c);
+        m_lodIdleTimer.start();   // schedule HQ re-render
     };
     m_style->onWindowLevelStarted = [this] {
         windowLevel(m_wlStartW, m_wlStartC);
+        beginInteraction();
     };
     m_style->onWindowLevelDelta = [this](int dx, int dy) {
         // Sensitivity: one full drag across ~512px spans the scalar range.
@@ -258,6 +260,8 @@ SliceViewer::SliceViewer(QWidget* parent)
     m_style->onRightClick = [this] {
         emit toolDeselectRequested();
     };
+    m_style->onInteractionBegin = [this] { beginInteraction(); };
+    m_style->onInteractionEnd   = [this] { m_lodIdleTimer.start(); };
 
     // Guard the VTK interactor: 'z' must never reach the style — VTK's
     // built-in handling flips the view. Abort the event at the source.
@@ -318,6 +322,39 @@ SliceViewer::SliceViewer(QWidget* parent)
         updatePlaneOrigin();
         m_renderWindow->Render();
     });
+
+    // LOD: 150ms after the last interaction, restore full-quality rendering.
+    m_lodIdleTimer.setSingleShot(true);
+    m_lodIdleTimer.setInterval(150);
+    connect(&m_lodIdleTimer, &QTimer::timeout, this, [this] {
+        if (m_interacting)
+            endInteraction();
+    });
+}
+
+void SliceViewer::beginInteraction()
+{
+    if (m_interacting)
+        return;
+    m_interacting = true;
+    // Tell VTK to prioritize frame rate over quality while interacting.
+    // The render window's desired update rate controls how VTK trades
+    // quality for FPS — high rate = coarser but faster rendering.
+    m_renderWindow->SetDesiredUpdateRate(30.0);
+    if (auto* iren = interactor())
+        iren->SetDesiredUpdateRate(30.0);
+}
+
+void SliceViewer::endInteraction()
+{
+    if (!m_interacting)
+        return;
+    m_interacting = false;
+    // Full-quality render: zero desired rate = still/quality mode.
+    m_renderWindow->SetDesiredUpdateRate(0.0);
+    if (auto* iren = interactor())
+        iren->SetDesiredUpdateRate(0.0001);
+    m_renderWindow->Render();
 }
 
 void SliceViewer::setVolume(const VolumePtr& vol, Orientation o)
@@ -569,6 +606,10 @@ void SliceViewer::setSlice(int s)
     const int clamped = m_volume->clampSlice(m_orientation, s);
     const bool same = clamped == m_slice;
     m_slice = clamped;
+
+    // Interactive LOD: fast rendering while scrolling, HQ when idle.
+    beginInteraction();
+    m_lodIdleTimer.start();
 
     if (!m_scrollAnim.isActive())
         m_scrollAnim.start();

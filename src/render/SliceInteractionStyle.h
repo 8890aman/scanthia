@@ -43,6 +43,9 @@ public:
     std::function<void(bool)>                         onStroke;  // begin/end
     /// Right-click (no drag) while a tool is active → deselect it.
     std::function<void()>                             onRightClick;
+    /// Called when a pan/zoom interaction begins/ends (for LOD).
+    std::function<void()>                             onInteractionBegin;
+    std::function<void()>                             onInteractionEnd;
 
     /// Supplied by the viewer so the style can convert display->world
     /// at the current slice plane.

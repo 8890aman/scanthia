@@ -122,6 +122,12 @@ public:
     /// event filter can set it even when another widget has focus.
     void setZoomKeyHeld(bool on) { m_zoomKeyHeld = on; }
 
+    /// Interactive LOD: called on scroll/drag start → fast rendering.
+    /// endInteraction() is called ~150ms after the last interaction to
+    /// trigger a full-quality re-render.
+    void beginInteraction();
+    void endInteraction();
+
 protected:
     void keyPressEvent(QKeyEvent* e) override;
     void keyReleaseEvent(QKeyEvent* e) override;
@@ -230,6 +236,8 @@ private:
     vtkSmartPointer<vtkLookupTable>         m_colorLut;
 
     QTimer m_cineTimer;
+    QTimer m_lodIdleTimer;     // fires ~150ms after last interaction → HQ
+    bool   m_interacting = false;
 };
 
 } // namespace meda
