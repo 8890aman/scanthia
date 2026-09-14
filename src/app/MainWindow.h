@@ -30,6 +30,7 @@ class MprWidget;
 class PacsDialog;
 class DicomWebDialog;
 class StoreScp;
+class ReceiverDock;
 class PluginManager;
 class InferenceEngine;
 class StudyDatabase;
@@ -47,6 +48,7 @@ private:
     void buildMenus();
     void buildDock();
     void buildToolbar();
+    void buildReceiverDock();
     void openFolder();
     void openFiles();
     void openCompareSeries();
@@ -54,6 +56,9 @@ private:
     void openAutoPullManager();
     void openBurnMedia();
     void openSegmentation();
+    /// Start (or restart) the local C-STORE SCP with persisted config.
+    /// Returns true if the SCP is listening after this call.
+    bool startStoreScp();
     /// Index `dir` into the local library DB. `onDone` (if set) runs on
     /// the GUI thread after refreshLibrary() — used to auto-open a
     /// just-retrieved study once its series are indexed.
@@ -122,6 +127,9 @@ private:
     PacsDialog*   m_pacsDialog = nullptr;
     DicomWebDialog* m_webDialog = nullptr;
     StoreScp*     m_storeScp;
+    ReceiverDock* m_receiverDock = nullptr;
+    QDockWidget*  m_receiverDockWidget = nullptr;
+    QAction*      m_receiverDockAction = nullptr;
     PluginManager* m_plugins;
     InferenceEngine* m_engine;
     StudyDatabase* m_db;

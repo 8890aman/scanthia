@@ -8,6 +8,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QStandardPaths>
@@ -102,7 +103,10 @@ PacsDialog::PacsDialog(QWidget* parent)
 
     m_echoBtn = new QPushButton(tr("C-ECHO"), this);
     m_queryBtn = new QPushButton(tr("Query"), this);
-    m_retrieveBtn = new QPushButton(tr("Retrieve Study"), this);
+    m_retrieveBtn = new QPushButton(tr("Retrieve Selected"), this);
+    m_retrieveBtn->setEnabled(false);
+    m_selectAllBtn = new QPushButton(tr("Select All"), this);
+    m_clearBtn = new QPushButton(tr("Clear"), this);
     m_retrieveMethod = new QComboBox(this);
     m_retrieveMethod->addItems({"C-MOVE", "C-GET"});
     m_retrieveMethod->setToolTip(
@@ -114,6 +118,8 @@ PacsDialog::PacsDialog(QWidget* parent)
     btnRow->addWidget(m_retrieveMethod);
     btnRow->addWidget(m_retrieveBtn);
     btnRow->addStretch();
+    btnRow->addWidget(m_selectAllBtn);
+    btnRow->addWidget(m_clearBtn);
 
     m_results = new QTableWidget(this);
     m_results->setColumnCount(7);
@@ -122,10 +128,20 @@ PacsDialog::PacsDialog(QWidget* parent)
          "Description", "Series"});
     m_results->horizontalHeader()->setStretchLastSection(true);
     m_results->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_results->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_results->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_results->setEditTriggers(QAbstractItemView::NoEditTriggers);
 
+    // Status row: text on the left, green progress tape on the right.
+    auto* statusRow = new QHBoxLayout;
     m_status = new QLabel(tr("Ready"), this);
+    m_progress = new QProgressBar(this);
+    m_progress->setMaximumWidth(260);
+    m_progress->setMinimumHeight(14);
+    m_progress->setTextVisible(true);
+    m_progress->setFormat("%v / %m");
+    m_progress->setVisible(false);
+    statusRow->addWidget(m_status, 1);
+    statusRow->addWidget(m_progress);
 
     auto* top = new QHBoxLayout;
     top->addWidget(nodeBox);
@@ -135,12 +151,29 @@ PacsDialog::PacsDialog(QWidget* parent)
     lay->addLayout(top);
     lay->addLayout(btnRow);
     lay->addWidget(m_results, 1);
-    lay->addWidget(m_status);
+    lay->addLayout(statusRow);
 
     connect(m_echoBtn, &QPushButton::clicked, this, &PacsDialog::onEcho);
     connect(m_queryBtn, &QPushButton::clicked, this, &PacsDialog::onQuery);
     connect(m_retrieveBtn, &QPushButton::clicked, this,
             &PacsDialog::onRetrieve);
+    connect(m_selectAllBtn, &QPushButton::clicked, this, [this] {
+        for (int r = 0; r < m_results->rowCount(); ++r)
+            if (auto* it = m_results->item(r, 0))
+                it->setCheckState(Qt::Checked);
+        updateRetrieveButton();
+    });
+    connect(m_clearBtn, &QPushButton::clicked, this, [this] {
+        for (int r = 0; r < m_results->rowCount(); ++r)
+            if (auto* it = m_results->item(r, 0))
+                it->setCheckState(Qt::Unchecked);
+        updateRetrieveButton();
+    });
+    connect(m_results, &QTableWidget::itemChanged, this,
+            [this](QTableWidgetItem* it) {
+        if (it && it->column() == 0)
+            updateRetrieveButton();
+    });
 }
 
 PacsNode PacsDialog::currentNode() const
@@ -208,6 +241,7 @@ void PacsDialog::onQuery()
                 m_status->setText(tr("Query failed: %1").arg(err.c_str()));
                 return;
             }
+            m_results->blockSignals(true);
             m_results->setRowCount(static_cast<int>(results.size()));
             int row = 0;
             for (const auto& r : results) {
@@ -222,49 +256,125 @@ void PacsDialog::onQuery()
                 set(4, r.modalitiesInStudy);
                 set(5, r.studyDescription);
                 set(6, r.numSeries);
-                m_results->item(row, 0)->setData(
+                // Checkbox on the Patient cell — tick to include the
+                // study in the retrieve set.
+                auto* patientItem = m_results->item(row, 0);
+                patientItem->setFlags(patientItem->flags() |
+                                      Qt::ItemIsUserCheckable);
+                patientItem->setCheckState(Qt::Unchecked);
+                patientItem->setData(
                     Qt::UserRole, r.studyInstanceUID.c_str());
                 ++row;
             }
+            m_results->blockSignals(false);
             m_status->setText(tr("%1 studies found").arg(results.size()));
+            updateRetrieveButton();
         }, Qt::QueuedConnection);
     });
 }
 
+QList<int> PacsDialog::checkedRows() const
+{
+    QList<int> rows;
+    for (int r = 0; r < m_results->rowCount(); ++r)
+        if (auto* it = m_results->item(r, 0))
+            if (it->checkState() == Qt::Checked)
+                rows << r;
+    return rows;
+}
+
+void PacsDialog::updateRetrieveButton()
+{
+    const int n = checkedRows().size();
+    m_retrieveBtn->setEnabled(n > 0);
+    m_retrieveBtn->setText(n > 0
+        ? tr("Retrieve Selected (%1)").arg(n)
+        : tr("Retrieve Selected"));
+}
+
 void PacsDialog::onRetrieve()
 {
-    const int row = m_results->currentRow();
-    if (row < 0) {
+    // Checked rows are the retrieve set; fall back to the current
+    // row when nothing is ticked (keeps single-click workflow).
+    QList<int> rows = checkedRows();
+    if (rows.isEmpty() && m_results->currentRow() >= 0)
+        rows << m_results->currentRow();
+    if (rows.isEmpty()) {
         m_status->setText(tr("Select a study first"));
         return;
     }
-    const QString uid =
-        m_results->item(row, 0)->data(Qt::UserRole).toString();
+
+    QStringList uids;
+    for (int r : rows)
+        uids << m_results->item(r, 0)->data(Qt::UserRole).toString();
+
     const bool useGet = m_retrieveMethod->currentText() == "C-GET";
     const PacsNode node = currentNode();
     const QString dest = m_moveDestAET->text();
-
-    const QString outDir =
+    const QString baseDir =
         QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
-        "/downloads/" + uid;
-    m_status->setText(tr("Retrieving study..."));
+        "/downloads";
 
-    QtConcurrent::run([this, node, uid, useGet, dest, outDir] {
-        std::string err;
-        const bool ok =
-            useGet
-                ? PacsClient().retrieveStudyGet(node, uid.toStdString(),
-                                                outDir.toStdString(), &err)
-                : PacsClient().retrieveStudyMove(node, uid.toStdString(),
-                                                 dest.toStdString(), &err);
-        QMetaObject::invokeMethod(this, [this, ok, err, outDir] {
-            if (!ok) {
-                m_status->setText(tr("Retrieve failed: %1").arg(err.c_str()));
-                return;
+    m_retrieveBtn->setEnabled(false);
+    m_progress->setVisible(true);
+    m_progress->setRange(0, 0);   // indeterminate until first response
+
+    QtConcurrent::run(
+        [this, node, uids, useGet, dest, baseDir] {
+        int done = 0, failed = 0;
+        QStringList gotDirs;
+        for (int i = 0; i < uids.size(); ++i) {
+            const QString& uid = uids[i];
+            const QString outDir = baseDir + "/" + uid;
+            const int idx = i;
+            QMetaObject::invokeMethod(this, [this, idx, n = uids.size()] {
+                m_status->setText(
+                    tr("Retrieving study %1 / %2 ...").arg(idx + 1).arg(n));
+            }, Qt::QueuedConnection);
+
+            std::string err;
+            // Forward per-study subop counts to the green bar.
+            const PacsClient::RetrieveProgress prog =
+                [this](int d, int r) {
+                    QMetaObject::invokeMethod(this, [this, d, r] {
+                        m_progress->setRange(0, d + r);
+                        m_progress->setValue(d);
+                    }, Qt::QueuedConnection);
+                };
+            const bool ok =
+                useGet
+                    ? PacsClient().retrieveStudyGet(
+                          node, uid.toStdString(), outDir.toStdString(),
+                          &err, prog)
+                    : PacsClient().retrieveStudyMove(
+                          node, uid.toStdString(), dest.toStdString(),
+                          &err, prog);
+            if (ok) {
+                ++done;
+                gotDirs << outDir;
+            } else {
+                ++failed;
+                QMetaObject::invokeMethod(this,
+                    [this, e = QString::fromStdString(err)] {
+                        m_status->setText(tr("Failed: %1").arg(e));
+                    }, Qt::QueuedConnection);
             }
-            m_status->setText(tr("Retrieved to %1").arg(outDir));
-            emit studyRetrieved(outDir);
-        }, Qt::QueuedConnection);
+        }
+        QMetaObject::invokeMethod(this,
+            [this, done, failed, gotDirs] {
+                m_progress->setVisible(false);
+                m_retrieveBtn->setEnabled(true);
+                m_status->setText(
+                    tr("Retrieved %1 stud%2%3")
+                        .arg(done)
+                        .arg(done == 1 ? "y" : "ies")
+                        .arg(failed
+                                 ? tr(", %1 failed").arg(failed)
+                                 : QString()));
+                // Index each retrieved study into the library.
+                for (const auto& d : gotDirs)
+                    emit studyRetrieved(d);
+            }, Qt::QueuedConnection);
     });
 }
 

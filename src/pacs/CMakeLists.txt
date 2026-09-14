@@ -29,6 +29,8 @@ add_library(meda_pacs STATIC
     Anonymizer.cpp
     AnonymizeDialog.h
     AnonymizeDialog.cpp
+    ReceiverDock.h
+    ReceiverDock.cpp
 )
 
 target_include_directories(meda_pacs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

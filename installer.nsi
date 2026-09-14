@@ -33,6 +33,10 @@ Section "Install"
 
     WriteUninstaller "$INSTDIR\Uninstall.exe"
 
+    ; Open the DICOM C-STORE SCP port in Windows Firewall so PACS
+    ; servers can push studies to Scanthia without manual config.
+    nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Scanthia DICOM SCP" dir=in action=allow protocol=TCP localport=11112 profile=any'
+
     ; scanthia:// URL protocol — lets RIS/HIS launch the viewer with a
     ; study: scanthia://study/<uid> or scanthia://open?path=<dir>
     WriteRegStr HKCR "scanthia" "" "URL:Scanthia Protocol"
@@ -61,6 +65,7 @@ SectionEnd
 Section "Uninstall"
     Delete "$SMPROGRAMS\Scanthia.lnk"
     Delete "$DESKTOP\Scanthia.lnk"
+    nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Scanthia DICOM SCP"'
     RMDir /r "$INSTDIR"
     DeleteRegKey HKCR "scanthia"
     DeleteRegKey HKLM \

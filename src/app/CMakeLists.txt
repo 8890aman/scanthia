@@ -41,3 +41,10 @@ if(WIN32 AND ONNXRUNTIME_DLL)
         endif()
     endforeach()
 endif()
+
+# Bundle the DCMTK storescp.cfg beside the exe — DcmStorageSCP needs it
+# to configure presentation contexts (SOP classes + transfer syntaxes).
+add_custom_command(TARGET Scanthia POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/resources/storescp.cfg"
+            $<TARGET_FILE_DIR:Scanthia>/storescp.cfg)

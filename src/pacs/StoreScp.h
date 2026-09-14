@@ -19,6 +19,9 @@ public:
     /// Start listening. Returns false if the port cannot be bound.
     bool start(uint16_t port, const std::string& aet,
                const std::string& outputDir);
+    /// Stop, then start again — used when the port/AET config changes.
+    bool restart(uint16_t port, const std::string& aet,
+                 const std::string& outputDir);
     void stop();
     bool isRunning() const;
 

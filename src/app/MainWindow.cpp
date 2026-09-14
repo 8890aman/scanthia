@@ -17,6 +17,7 @@
 #include "DicomNodes.h"
 #include "NodesDialog.h"
 #include "AnonymizeDialog.h"
+#include "ReceiverDock.h"
 #include "Segmentation.h"
 #include "AiPlugin.h"
 #include "PluginManager.h"
@@ -469,6 +470,12 @@ MainWindow::MainWindow()
     // Track the 'Z' zoom-modifier key app-wide so Z+wheel zooms in
     // whichever pane the mouse is over, regardless of keyboard focus.
     qApp->installEventFilter(this);
+
+    // --- Receiver dock + SCP ------------------------------------------
+    // Always-on C-STORE SCP so a PACS can push studies to us without
+    // first opening the PACS dialog. Config + queue live in a dock.
+    buildReceiverDock();
+    startStoreScp();
 }
 
 bool MainWindow::eventFilter(QObject* o, QEvent* e)
@@ -1094,6 +1101,16 @@ void MainWindow::buildMenus()
 
     // Dedicated PACS top-level menu — nodes, query, auto-pull, media.
     auto* pacs = menuBar()->addMenu(tr("&PACS"));
+    m_receiverDockAction = pacs->addAction(tr("&Receiver Panel"),
+        m_receiverDockWidget, &QDockWidget::show);
+    m_receiverDockAction->setCheckable(true);
+    m_receiverDockAction->setShortcut(Qt::Key_F6);
+    connect(m_receiverDockWidget, &QDockWidget::visibilityChanged,
+            this, [this](bool v) {
+        if (m_receiverDockAction)
+            m_receiverDockAction->setChecked(v);
+    });
+    pacs->addSeparator();
     pacs->addAction(tr("&DICOM Nodes..."), this, [this] {
         NodesDialog dlg(this);
         dlg.exec();
@@ -1442,25 +1459,87 @@ void MainWindow::openPacs()
         m_pacsDialog = new PacsDialog(this);
         connect(m_pacsDialog, &PacsDialog::studyRetrieved, this,
                 [this](const QString& dir) { scanAndList(dir); });
-        // Start the local C-STORE SCP so PACS can push studies to us.
-        const QString dl =
-            QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
-            "/incoming";
-        QDir().mkpath(dl);
-        if (!m_storeScp->start(11112, "Scanthia", dl.toStdString()))
-            m_statusLabel->setText(
-                tr("Warning: store SCP failed to start on port 11112"));
         // Index pushed studies: debounce a rescan 2s after the last file.
-        m_incomingTimer = new QTimer(this);
-        m_incomingTimer->setSingleShot(true);
-        m_incomingTimer->setInterval(2000);
-        connect(m_incomingTimer, &QTimer::timeout, this,
-                [this, dl] { scanAndList(dl); });
-        connect(m_storeScp, &StoreScp::fileReceived, this,
-                [this](const QString&) { m_incomingTimer->start(); });
+        if (!m_incomingTimer) {
+            const QString dl =
+                QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+                "/incoming";
+            QDir().mkpath(dl);
+            m_incomingTimer = new QTimer(this);
+            m_incomingTimer->setSingleShot(true);
+            m_incomingTimer->setInterval(2000);
+            connect(m_incomingTimer, &QTimer::timeout, this,
+                    [this, dl] { scanAndList(dl); });
+        }
     }
     m_pacsDialog->show();
     m_pacsDialog->raise();
+}
+
+void MainWindow::buildReceiverDock()
+{
+    m_receiverDock = new ReceiverDock(this);
+    m_receiverDockWidget = new QDockWidget(tr("Receiver"), this);
+    m_receiverDockWidget->setObjectName("ReceiverDock");
+    m_receiverDockWidget->setWidget(m_receiverDock);
+    m_receiverDockWidget->setAllowedAreas(Qt::LeftDockWidgetArea |
+                                          Qt::RightDockWidgetArea);
+    addDockWidget(Qt::RightDockWidgetArea, m_receiverDockWidget);
+    // Default hidden — toggle from the PACS menu.
+    m_receiverDockWidget->hide();
+
+    // Apply from the dock restarts the SCP with the new config.
+    connect(m_receiverDock, &ReceiverDock::applyRequested, this,
+            [this](const QString& aet, int port) {
+        QSettings().setValue("scp/aet",  aet);
+        QSettings().setValue("scp/port", port);
+        const bool ok = startStoreScp();
+        m_receiverDock->setListening(ok,
+            ok ? tr("Listening on %1 as %2").arg(port).arg(aet)
+               : tr("Port %1 in use").arg(port));
+    });
+}
+
+bool MainWindow::startStoreScp()
+{
+    const QString dl =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+        "/incoming";
+    QDir().mkpath(dl);
+
+    QSettings s;
+    QString aet = s.value("scp/aet", "Scanthia").toString();
+    int     port = s.value("scp/port", 11112).toInt();
+    if (aet.trimmed().isEmpty()) aet = "Scanthia";
+    if (port < 1 || port > 65535) port = 11112;
+
+    const bool ok = m_storeScp->restart(
+        static_cast<uint16_t>(port), aet.toStdString(), dl.toStdString());
+
+    if (m_receiverDock) {
+        m_receiverDock->setConfig(aet, port, dl);
+        m_receiverDock->setListening(ok,
+            ok ? tr("Listening on %1 as %2").arg(port).arg(aet)
+               : tr("Port %1 in use").arg(port));
+    }
+    if (ok) {
+        // Forward each received file to the queue + the debounced
+        // library rescan. UniqueConnection keeps restarts from stacking.
+        disconnect(m_storeScp, &StoreScp::fileReceived, nullptr, nullptr);
+        connect(m_storeScp, &StoreScp::fileReceived, this,
+                [this](const QString& path) {
+            if (m_receiverDock)
+                m_receiverDock->addReceived(path);
+            if (m_incomingTimer)
+                m_incomingTimer->start();
+        }, Qt::UniqueConnection);
+        m_statusLabel->setText(
+            tr("Receiver: %1@%2 listening").arg(aet).arg(port));
+    } else {
+        m_statusLabel->setText(
+            tr("Warning: receiver SCP failed on port %1").arg(port));
+    }
+    return ok;
 }
 
 void MainWindow::openAutoPullManager()

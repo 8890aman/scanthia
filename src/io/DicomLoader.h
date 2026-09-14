@@ -55,9 +55,9 @@ public:
         /// Return true to abort the load.
         std::function<bool()> shouldCancel;
         /// Max bytes for the in-memory volume (ITK + VTK buffers).
-        /// 0 = unlimited. Default 1 GiB when unset — studies larger
+        /// 0 = unlimited. Default 4 GiB when unset — studies larger
         /// than this are downsampled in-plane then in-z to fit.
-        size_t memoryBudgetBytes = 1ull << 30;
+        size_t memoryBudgetBytes = 4ull << 30;
     };
     static VolumePtr loadSeriesStreaming(const SeriesMeta& series,
                                          const StreamCallbacks& cb);
