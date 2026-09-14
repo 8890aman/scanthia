@@ -9,6 +9,9 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QVariant>
+#include <QThread>
+#include <cstdio>
+#include <mutex>
 
 namespace meda {
 
@@ -33,6 +36,26 @@ const char* kSchema[] = {
     "CREATE INDEX IF NOT EXISTS idx_series_study ON series(study_uid)",
 };
 
+/// Each thread gets its own QSqlDatabase connection to the same file.
+/// Qt SQL connections are thread-bound — sharing one across threads
+/// silently corrupts SQLite.  The mutex serializes writes so the
+/// schema and thumbnails don't race.
+QSqlDatabase threadConn(const QString& path, std::mutex& mtx)
+{
+    const auto tid = QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+    const auto name = "Scanthia_" + tid;
+    if (QSqlDatabase::contains(name))
+        return QSqlDatabase::database(name);
+    std::lock_guard<std::mutex> g(mtx);
+    auto db = QSqlDatabase::addDatabase("QSQLITE", name);
+    db.setDatabaseName(path);
+    db.open();
+    QSqlQuery(db).exec("PRAGMA foreign_keys = ON");
+    for (const char* stmt : kSchema)
+        QSqlQuery(db).exec(stmt);
+    return db;
+}
+
 QSqlQuery q(QSqlDatabase& db, const QString& sql)
 {
     QSqlQuery query(db);
@@ -43,43 +66,46 @@ QSqlQuery q(QSqlDatabase& db, const QString& sql)
 } // namespace
 
 struct StudyDatabase::Impl {
-    QSqlDatabase db;
+    QString path;
+    std::mutex mtx;
 };
 
 StudyDatabase::StudyDatabase() : m_impl(std::make_unique<Impl>()) {}
 StudyDatabase::~StudyDatabase()
 {
-    if (m_impl->db.isOpen()) {
-        const auto name = m_impl->db.connectionName();
-        m_impl->db.close();
+    // Close and remove all thread connections we created.
+    const auto tid = QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+    const auto name = "Scanthia_" + tid;
+    if (QSqlDatabase::contains(name)) {
+        QSqlDatabase::database(name).close();
         QSqlDatabase::removeDatabase(name);
     }
 }
 
 bool StudyDatabase::open(const QString& path)
 {
-    m_impl->db = QSqlDatabase::addDatabase("QSQLITE", "Scanthia");
-    m_impl->db.setDatabaseName(path);
-    if (!m_impl->db.open())
-        return false;
-    QSqlQuery(m_impl->db).exec("PRAGMA foreign_keys = ON");
-    for (const char* stmt : kSchema) {
-        if (!QSqlQuery(m_impl->db).exec(stmt))
-            return false;
-    }
-    return true;
+    m_impl->path = path;
+    auto db = threadConn(path, m_impl->mtx);
+    return db.isOpen();
 }
 
-bool StudyDatabase::isOpen() const { return m_impl->db.isOpen(); }
+bool StudyDatabase::isOpen() const
+{
+    const auto tid = QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+    const auto name = "Scanthia_" + tid;
+    return QSqlDatabase::contains(name) && QSqlDatabase::database(name).isOpen();
+}
 
 int StudyDatabase::indexDirectory(const QString& dir)
 {
+    std::lock_guard<std::mutex> g(m_impl->mtx);
+    auto db = threadConn(m_impl->path, m_impl->mtx);
     auto series = DicomLoader::scanDirectory(dir.toStdString());
     int count = 0;
     QStringList keep;
     for (auto& s : series) {
         // Upsert study.
-        auto qs = q(m_impl->db,
+        auto qs = q(db,
             "INSERT INTO studies(study_uid,patient_name,patient_id,study_date,"
             "description,accession,modalities) VALUES(?,?,?,?,?,?,?) "
             "ON CONFLICT(study_uid) DO UPDATE SET "
@@ -98,7 +124,7 @@ int StudyDatabase::indexDirectory(const QString& dir)
         for (const auto& f : s.files)
             files.append(QString::fromStdString(f));
 
-        auto qe = q(m_impl->db,
+        auto qe = q(db,
             "INSERT INTO series(series_uid,study_uid,modality,description,"
             "body_part,rows,cols,instances,ww,wc,has_wl,dir,files) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
@@ -124,21 +150,31 @@ int StudyDatabase::indexDirectory(const QString& dir)
 
         // Generate thumbnail if missing.
         const auto suid = QString::fromStdString(s.seriesInstanceUID);
-        if (thumbnail(suid).isEmpty()) {
-            QStringList fl;
-            for (const auto& f : s.files)
-                fl << QString::fromStdString(f);
-            double ww = s.hasWindowing ? s.windowWidth : 2000.0;
-            double wc = s.hasWindowing ? s.windowCenter : 0.0;
-            auto png = Thumbnailer::renderPng(fl, ww, wc);
-            if (!png.isEmpty())
-                setThumbnail(suid, png);
+        {
+            auto tq = q(db, "SELECT thumb FROM series WHERE series_uid=?");
+            tq.addBindValue(suid);
+            tq.exec();
+            bool has = tq.next() && !tq.value(0).toByteArray().isEmpty();
+            if (!has) {
+                QStringList fl;
+                for (const auto& f : s.files)
+                    fl << QString::fromStdString(f);
+                double ww = s.hasWindowing ? s.windowWidth : 2000.0;
+                double wc = s.hasWindowing ? s.windowCenter : 0.0;
+                auto png = Thumbnailer::renderPng(fl, ww, wc);
+                if (!png.isEmpty()) {
+                    auto uq = q(db, "UPDATE series SET thumb=? WHERE series_uid=?");
+                    uq.addBindValue(png);
+                    uq.addBindValue(suid);
+                    uq.exec();
+                }
+            }
         }
     }
 
     // Prune stale rows: anything indexed from this dir that no longer
     // qualifies (e.g. non-image series filtered by the loader now).
-    QSqlQuery del(m_impl->db);
+    QSqlQuery del(db);
     del.exec("SELECT series_uid FROM series WHERE dir=" + QString("'%1'")
                  .arg(QString(dir).replace('\'', "''")));
     QStringList stale;
@@ -147,12 +183,12 @@ int StudyDatabase::indexDirectory(const QString& dir)
     for (const auto& suid : stale) {
         if (keep.contains(suid))
             continue;
-        auto d = q(m_impl->db, "DELETE FROM series WHERE series_uid=?");
+        auto d = q(db, "DELETE FROM series WHERE series_uid=?");
         d.addBindValue(suid);
         d.exec();
     }
     // Drop orphan studies.
-    QSqlQuery(m_impl->db).exec(
+    QSqlQuery(db).exec(
         "DELETE FROM studies WHERE study_uid NOT IN "
         "(SELECT DISTINCT study_uid FROM series)");
     return count;
@@ -161,12 +197,18 @@ int StudyDatabase::indexDirectory(const QString& dir)
 QList<StudyRecord> StudyDatabase::studies() const
 {
     QList<StudyRecord> out;
-    QSqlQuery query(m_impl->db);
-    query.exec(
+    auto db = threadConn(m_impl->path, m_impl->mtx);
+    QSqlQuery query(db);
+    const QString sql =
         "SELECT s.study_uid,s.patient_name,s.patient_id,s.study_date,"
         "s.description,s.accession,s.modalities,COUNT(r.series_uid) "
         "FROM studies s LEFT JOIN series r ON r.study_uid=s.study_uid "
-        "GROUP BY s.study_uid ORDER BY s.study_date DESC, s.patient_name");
+        "GROUP BY s.study_uid ORDER BY s.study_date DESC, s.patient_name";
+    if (!query.exec(sql)) {
+        std::fprintf(stderr, "studies() query failed: %s\n",
+                     query.lastError().text().toUtf8().constData());
+        return out;
+    }
     while (query.next()) {
         StudyRecord r;
         r.studyUID    = query.value(0).toString();
@@ -185,7 +227,8 @@ QList<StudyRecord> StudyDatabase::studies() const
 QList<SeriesMeta> StudyDatabase::seriesOf(const QString& studyUID) const
 {
     QList<SeriesMeta> out;
-    auto query = q(m_impl->db,
+    auto db = threadConn(m_impl->path, m_impl->mtx);
+    auto query = q(db,
         "SELECT * FROM series WHERE study_uid=? ORDER BY description");
     query.addBindValue(studyUID);
     query.exec();
@@ -213,7 +256,8 @@ QList<SeriesMeta> StudyDatabase::seriesOf(const QString& studyUID) const
 
 SeriesMeta StudyDatabase::series(const QString& seriesUID) const
 {
-    auto query = q(m_impl->db, "SELECT study_uid FROM series WHERE series_uid=?");
+    auto db = threadConn(m_impl->path, m_impl->mtx);
+    auto query = q(db, "SELECT study_uid FROM series WHERE series_uid=?");
     query.addBindValue(seriesUID);
     query.exec();
     if (!query.next())
@@ -226,7 +270,8 @@ SeriesMeta StudyDatabase::series(const QString& seriesUID) const
 
 QByteArray StudyDatabase::thumbnail(const QString& seriesUID) const
 {
-    auto query = q(m_impl->db, "SELECT thumb FROM series WHERE series_uid=?");
+    auto db = threadConn(m_impl->path, m_impl->mtx);
+    auto query = q(db, "SELECT thumb FROM series WHERE series_uid=?");
     query.addBindValue(seriesUID);
     query.exec();
     if (query.next())
@@ -237,7 +282,9 @@ QByteArray StudyDatabase::thumbnail(const QString& seriesUID) const
 void StudyDatabase::setThumbnail(const QString& seriesUID,
                                  const QByteArray& png)
 {
-    auto query = q(m_impl->db, "UPDATE series SET thumb=? WHERE series_uid=?");
+    std::lock_guard<std::mutex> g(m_impl->mtx);
+    auto db = threadConn(m_impl->path, m_impl->mtx);
+    auto query = q(db, "UPDATE series SET thumb=? WHERE series_uid=?");
     query.addBindValue(png);
     query.addBindValue(seriesUID);
     query.exec();
@@ -245,28 +292,34 @@ void StudyDatabase::setThumbnail(const QString& seriesUID,
 
 void StudyDatabase::removeStudy(const QString& studyUID)
 {
-    auto q1 = q(m_impl->db, "DELETE FROM series WHERE study_uid=?");
+    std::lock_guard<std::mutex> g(m_impl->mtx);
+    auto db = threadConn(m_impl->path, m_impl->mtx);
+    auto q1 = q(db, "DELETE FROM series WHERE study_uid=?");
     q1.addBindValue(studyUID);
     q1.exec();
-    auto q2 = q(m_impl->db, "DELETE FROM studies WHERE study_uid=?");
+    auto q2 = q(db, "DELETE FROM studies WHERE study_uid=?");
     q2.addBindValue(studyUID);
     q2.exec();
 }
 
 void StudyDatabase::removeSeries(const QString& seriesUID)
 {
-    auto q1 = q(m_impl->db, "DELETE FROM series WHERE series_uid=?");
+    std::lock_guard<std::mutex> g(m_impl->mtx);
+    auto db = threadConn(m_impl->path, m_impl->mtx);
+    auto q1 = q(db, "DELETE FROM series WHERE series_uid=?");
     q1.addBindValue(seriesUID);
     q1.exec();
-    QSqlQuery(m_impl->db).exec(
+    QSqlQuery(db).exec(
         "DELETE FROM studies WHERE study_uid NOT IN "
         "(SELECT DISTINCT study_uid FROM series)");
 }
 
 void StudyDatabase::clear()
 {
-    QSqlQuery(m_impl->db).exec("DELETE FROM series");
-    QSqlQuery(m_impl->db).exec("DELETE FROM studies");
+    std::lock_guard<std::mutex> g(m_impl->mtx);
+    auto db = threadConn(m_impl->path, m_impl->mtx);
+    QSqlQuery(db).exec("DELETE FROM series");
+    QSqlQuery(db).exec("DELETE FROM studies");
 }
 
 } // namespace meda
