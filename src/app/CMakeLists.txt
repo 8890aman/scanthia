@@ -2,6 +2,8 @@ add_executable(Scanthia WIN32
     main.cpp
     MainWindow.h
     MainWindow.cpp
+    ConfigDock.h
+    ConfigDock.cpp
     icons.qrc
     Scanthia.rc
 )

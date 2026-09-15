@@ -52,6 +52,20 @@ std::string getTagString(const itk::MetaDataDictionary& dict, const char* key)
     return v;
 }
 
+/// UID tags (0020,000d / 0020,000e) are single-valued per the standard,
+/// but anonymized/re-identified exports sometimes stack an alias as a
+/// second value — ITK then returns "real-UID\alias-UID". Take only the
+/// first component so study lookups match the UID a RIS would send.
+std::string getFirstUid(const itk::MetaDataDictionary& dict,
+                        const char* key)
+{
+    std::string v = getTagString(dict, key);
+    const auto bs = v.find('\\');
+    if (bs != std::string::npos)
+        v.resize(bs);
+    return v;
+}
+
 /// Z position of a slice, read from the file header only. NaN on failure.
 double slicePosition(const std::string& path)
 {
@@ -237,7 +251,7 @@ SeriesMeta DicomLoader::readSeriesHeader(const std::string& firstFile,
     m.seriesInstanceUID = seriesUID;
     m.files             = std::move(files);
     m.instanceCount     = static_cast<int>(m.files.size());
-    m.studyInstanceUID  = getTagString(dict, "0020|000d");
+    m.studyInstanceUID  = getFirstUid(dict, "0020|000d");
     m.seriesDescription = getTagString(dict, "0008|103e");
     m.studyDescription  = getTagString(dict, "0008|1030");
     m.modality          = getTagString(dict, "0008|0060");

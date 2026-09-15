@@ -9,6 +9,7 @@
 #include "PacsDialog.h"
 #include "DicomWebDialog.h"
 #include "DicomWebClient.h"
+#include "ConfigDock.h"
 #include "StoreScp.h"
 #include "AutoPullManager.h"
 #include "AutoPullRuleEditor.h"
@@ -476,6 +477,13 @@ MainWindow::MainWindow()
     // Always-on C-STORE SCP so a PACS can push studies to us without
     // first opening the PACS dialog. Config + queue live in a dock.
     buildReceiverDock();
+    buildConfigDock();
+    // Restore persisted viewer prefs (slice sort, cine fps).
+    {
+        QSettings s;
+        m_sliceSort = s.value("viewer/sliceSort", 0).toInt();
+        m_cineFps   = s.value("viewer/cineFps", 15).toInt();
+    }
     startStoreScp();
 }
 
@@ -872,9 +880,17 @@ void MainWindow::retrieveFromNode(const QString& studyUID,
     // Local library, open the study's first series.
     auto indexAndOpen = [this](const QString& uid, const QString& outDir) {
         m_statusLabel->setText(tr("Retrieved — indexing..."));
-        scanAndList(outDir, [this, uid] {
+        scanAndList(outDir, [this, uid, outDir] {
             m_sourceCombo->setCurrentIndex(0);
-            const auto sl = m_db->seriesOf(uid);
+            // The retrieved files may carry a duplicate/aliased
+            // StudyInstanceUID tag (re-identified exports sometimes
+            // stack a second UID value), so the indexer can store the
+            // series under a different study_uid than the one we
+            // requested. Prefer the requested UID; fall back to whatever
+            // was indexed from this directory.
+            auto sl = m_db->seriesOf(uid);
+            if (sl.isEmpty())
+                sl = m_db->seriesInDir(outDir);
             if (!sl.isEmpty())
                 loadSeries(m_db->series(
                     QString::fromStdString(sl.first().seriesInstanceUID)));
@@ -998,7 +1014,7 @@ void MainWindow::retrieveFromNode(const QString& studyUID,
         m_statusLabel->setText(tr("Retrieving %1...").arg(uid));
         m_progress->setRange(0, 0);   // indeterminate until first response
         m_progress->setVisible(true);
-        QtConcurrent::run([this, node, uid, outDir, useGet, dest] {
+        QtConcurrent::run([this, node, uid, outDir, useGet, dest, indexAndOpen] {
             std::string err;
             const bool ok =
                 useGet ? PacsClient().retrieveStudyGet(
@@ -1008,7 +1024,7 @@ void MainWindow::retrieveFromNode(const QString& studyUID,
                              node, uid.toStdString(),
                              dest.toStdString(), &err);
             QMetaObject::invokeMethod(this,
-                    [this, ok, err, outDir, uid] {
+                    [this, ok, err, outDir, uid, indexAndOpen] {
                 m_progress->setVisible(false);
                 m_progress->setRange(0, 100);
                 if (!ok) {
@@ -1016,15 +1032,7 @@ void MainWindow::retrieveFromNode(const QString& studyUID,
                         tr("Retrieve failed: %1").arg(err.c_str()));
                     return;
                 }
-                m_statusLabel->setText(tr("Retrieved — indexing..."));
-                scanAndList(outDir, [this, uid] {
-                    m_sourceCombo->setCurrentIndex(0);
-                    const auto sl = m_db->seriesOf(uid);
-                    if (!sl.isEmpty())
-                        loadSeries(m_db->series(
-                            QString::fromStdString(
-                                sl.first().seriesInstanceUID)));
-                });
+                indexAndOpen(uid, outDir);
             }, Qt::QueuedConnection);
         });
     };
@@ -1130,6 +1138,20 @@ void MainWindow::buildMenus()
     m_segDockAction->setCheckable(true);
     m_segDockAction->setChecked(true);
     m_segDockAction->setShortcut(QKeySequence("Alt+I"));
+
+    m_configDockAction = view->addAction(
+        tr("&Configuration"), this, [this](bool on) {
+            if (m_configDockWidget)
+                m_configDockWidget->setVisible(on);
+        });
+    m_configDockAction->setCheckable(true);
+    m_configDockAction->setChecked(false);
+    m_configDockAction->setShortcut(QKeySequence("Alt+,"));
+    connect(m_configDockWidget, &QDockWidget::visibilityChanged,
+            this, [this](bool v) {
+        if (m_configDockAction)
+            m_configDockAction->setChecked(v);
+    });
 
     auto* cross = view->addAction(tr("Crosshair Lines"), this, [this](bool on) {
         m_mpr->setCrosshairVisible(on);
@@ -1727,6 +1749,41 @@ void MainWindow::buildReceiverDock()
     });
 }
 
+void MainWindow::buildConfigDock()
+{
+    m_configDock = new ConfigDock(this);
+    m_configDockWidget = new QDockWidget(tr("Configuration"), this);
+    m_configDockWidget->setObjectName("ConfigDock");
+    m_configDockWidget->setWidget(m_configDock);
+    m_configDockWidget->setAllowedAreas(Qt::LeftDockWidgetArea |
+                                        Qt::RightDockWidgetArea);
+    addDockWidget(Qt::RightDockWidgetArea, m_configDockWidget);
+    m_configDockWidget->hide();
+
+    // Receiver apply → restart the SCP (same as the Receiver dock).
+    connect(m_configDock, &ConfigDock::receiverChanged, this,
+            [this](const QString& aet, int port) {
+        const bool ok = startStoreScp();
+        if (m_receiverDock)
+            m_receiverDock->setListening(ok,
+                ok ? tr("Listening on %1 as %2").arg(port).arg(aet)
+                   : tr("Port %1 in use").arg(port));
+        // Apply also syncs viewer prefs — read them live.
+        QSettings s;
+        m_sliceSort = s.value("viewer/sliceSort", 0).toInt();
+        setCineFps(s.value("viewer/cineFps", 15).toInt());
+        if (m_mpr->volumeView())
+            m_mpr->volumeView()->setShowPlanes(
+                s.value("viewer/showPlanes", true).toBool());
+    });
+    // Memory budget → next load uses the new cap.
+    connect(m_configDock, &ConfigDock::memoryBudgetChanged, this,
+            [this](qint64 bytes) {
+        m_statusLabel->setText(
+            tr("Memory budget: %1 GB").arg(bytes / double(1 << 30)));
+    });
+}
+
 bool MainWindow::startStoreScp()
 {
     const QString dl =
@@ -1809,10 +1866,14 @@ void MainWindow::scanAndList(const QString& dir, std::function<void()> onDone)
 {
     m_statusLabel->setText(tr("Indexing %1...").arg(dir));
     QtConcurrent::run([this, dir, onDone] {
-        const int n =
-            m_db->isOpen() ? m_db->indexDirectory(dir)
-                           : int(DicomLoader::scanDirectory(dir.toStdString())
-                                     .size());
+        // indexDirectory() opens its own per-thread QSqlDatabase
+        // connection via threadConn(), so it works from any thread.
+        // The old isOpen() guard checked for a connection on *this*
+        // worker thread (which was never created — only the main thread
+        // called open()), so it always fell back to the non-persisting
+        // scanDirectory().size() path. That left the DB empty and the
+        // post-retrieve auto-open found nothing to load.
+        const int n = m_db->indexDirectory(dir);
         QMetaObject::invokeMethod(this, [this, n, dir, onDone] {
             refreshLibrary();
             m_statusLabel->setText(
@@ -1842,8 +1903,20 @@ void MainWindow::loadSeries(const SeriesMeta& meta)
 
     DicomLoader::StreamCallbacks scb;
     scb.shouldCancel = [this, gen] { return gen != m_loadGen.load(); };
+    // Memory budget from the Configuration dock — defaults to 4 GB.
+    scb.memoryBudgetBytes = static_cast<size_t>(
+        QSettings().value("viewer/memBudgetGB", 4.0).toDouble() *
+        (1 << 30));
     scb.onProgress = [this, gen](VolumePtr vol, int loaded, int total) {
+        // Coalesce: if a repaint is already queued, drop this tick —
+        // the queued one repaints the shared buffer anyway. Without this
+        // a 1700-slice series queues ~400 renders and wheel input starves.
+        if (m_repaintQueued.fetch_add(1) > 0) {
+            m_repaintQueued.fetch_sub(1);
+            return;
+        }
         QMetaObject::invokeMethod(this, [this, gen, vol, loaded, total] {
+            m_repaintQueued.fetch_sub(1);
             if (gen != m_loadGen.load())
                 return;                    // stale load — drop the tick
             m_progress->setValue(total > 0 ? loaded * 100 / total : 0);
@@ -2660,7 +2733,12 @@ void MainWindow::openUrl(const QString& url)
     else if (u.startsWith("scanthia:", Qt::CaseInsensitive))
         u = u.mid(9);
     const int qi = u.indexOf('?');
-    const QString cmd = qi < 0 ? u : u.left(qi);
+    QString cmd = qi < 0 ? u : u.left(qi);
+    // Browsers often append a trailing slash to the path before the
+    // query string (e.g. scanthia://retrieve/?studyUID=...). Strip it
+    // so the command still matches.
+    while (cmd.endsWith('/'))
+        cmd.chop(1);
     const QString query = qi < 0 ? QString() : u.mid(qi + 1);
 
     if (cmd.compare("open", Qt::CaseInsensitive) == 0) {

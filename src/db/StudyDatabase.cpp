@@ -98,8 +98,12 @@ bool StudyDatabase::isOpen() const
 
 int StudyDatabase::indexDirectory(const QString& dir)
 {
-    std::lock_guard<std::mutex> g(m_impl->mtx);
+    // threadConn() must be called BEFORE acquiring m_impl->mtx —
+    // threadConn() itself locks the mutex when creating a new
+    // connection, so calling it under the lock deadlocks on the
+    // first indexDirectory() from a worker thread.
     auto db = threadConn(m_impl->path, m_impl->mtx);
+    std::lock_guard<std::mutex> g(m_impl->mtx);
     auto series = DicomLoader::scanDirectory(dir.toStdString());
     int count = 0;
     QStringList keep;
@@ -231,6 +235,36 @@ QList<SeriesMeta> StudyDatabase::seriesOf(const QString& studyUID) const
     auto query = q(db,
         "SELECT * FROM series WHERE study_uid=? ORDER BY description");
     query.addBindValue(studyUID);
+    query.exec();
+    while (query.next()) {
+        SeriesMeta s;
+        s.seriesInstanceUID = query.value("series_uid").toString().toStdString();
+        s.studyInstanceUID  = query.value("study_uid").toString().toStdString();
+        s.modality          = query.value("modality").toString().toStdString();
+        s.seriesDescription = query.value("description").toString().toStdString();
+        s.bodyPart          = query.value("body_part").toString().toStdString();
+        s.rows              = query.value("rows").toInt();
+        s.columns           = query.value("cols").toInt();
+        s.instanceCount     = query.value("instances").toInt();
+        s.windowWidth       = query.value("ww").toDouble();
+        s.windowCenter      = query.value("wc").toDouble();
+        s.hasWindowing      = query.value("has_wl").toInt() != 0;
+        const auto filesJson = QJsonDocument::fromJson(
+            query.value("files").toString().toUtf8());
+        for (const auto& f : filesJson.array())
+            s.files.push_back(f.toString().toStdString());
+        out.append(s);
+    }
+    return out;
+}
+
+QList<SeriesMeta> StudyDatabase::seriesInDir(const QString& dir) const
+{
+    QList<SeriesMeta> out;
+    auto db = threadConn(m_impl->path, m_impl->mtx);
+    auto query = q(db,
+        "SELECT * FROM series WHERE dir=? ORDER BY description");
+    query.addBindValue(dir);
     query.exec();
     while (query.next()) {
         SeriesMeta s;
