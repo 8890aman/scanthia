@@ -70,6 +70,72 @@ void DicomWebClient::querySeries(const QString& studyUID, Rows done,
             done, fail);
 }
 
+void DicomWebClient::queryStudiesFiltered(const QString& accession,
+                                          const QString& patientID,
+                                          const QString& studyUID,
+                                          Rows done, Error fail)
+{
+    QString path = "/qido/studies?includefield=00081030";
+    QUrlQuery q;
+    if (!accession.isEmpty())
+        q.addQueryItem("AccessionNumber", accession);
+    if (!patientID.isEmpty())
+        q.addQueryItem("PatientID", patientID);
+    if (!studyUID.isEmpty())
+        q.addQueryItem("StudyInstanceUID", studyUID);
+    const QString qs = q.toString();
+    if (!qs.isEmpty())
+        path += "&" + qs;
+    getJson(path, done, fail);
+}
+
+void DicomWebClient::retrieveStudy(
+    const QString& studyUID, const QString& destDir,
+    std::function<void(int, int)> progress,
+    std::function<void(const QString& dir)> done, Error fail)
+{
+    QDir().mkpath(destDir);
+    // 1) List the study's series via QIDO, then pull each in turn.
+    querySeries(studyUID, [=](const QJsonArray& seriesList) {
+        QStringList uids;
+        for (const auto& v : seriesList) {
+            const QString suid = tag(v.toObject(), "0020000E");
+            if (!suid.isEmpty())
+                uids << suid;
+        }
+        if (uids.isEmpty()) {
+            fail(QStringLiteral("Study has no series"));
+            return;
+        }
+        auto remaining = std::make_shared<QStringList>(uids);
+        auto finished = std::make_shared<int>(0);
+        auto failed   = std::make_shared<bool>(false);
+        auto next = std::make_shared<std::function<void()>>();
+        *next = [=] {
+            if (*failed)
+                return;
+            if (remaining->isEmpty()) {
+                done(destDir);
+                return;
+            }
+            const QString suid = remaining->takeFirst();
+            retrieveSeries(studyUID, suid, destDir + "/" + suid,
+                {},   // per-file progress — we report per-series
+                [=](const QString&) {
+                    ++(*finished);
+                    if (progress)
+                        progress(*finished, uids.size());
+                    (*next)();
+                },
+                [=](const QString& e) {
+                    *failed = true;
+                    fail(e);
+                });
+        };
+        (*next)();
+    }, fail);
+}
+
 void DicomWebClient::retrieveSeries(
     const QString& studyUID, const QString& seriesUID, const QString& destDir,
     std::function<void(int, int)> progress,

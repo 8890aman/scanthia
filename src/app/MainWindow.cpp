@@ -8,6 +8,7 @@
 #include "VolumeWidget.h"
 #include "PacsDialog.h"
 #include "DicomWebDialog.h"
+#include "DicomWebClient.h"
 #include "StoreScp.h"
 #include "AutoPullManager.h"
 #include "AutoPullRuleEditor.h"
@@ -837,6 +838,232 @@ void MainWindow::retrieveRemoteStudy(const QString& studyUID)
                     break;   // open the first series only
                 }
             });
+        }, Qt::QueuedConnection);
+    });
+}
+
+void MainWindow::retrieveFromNode(const QString& studyUID,
+                                  const QString& accession,
+                                  const QString& patientID,
+                                  const QString& nodeName,
+                                  const QString& host,
+                                  int port,
+                                  const QString& aet,
+                                  const QString& callingAET,
+                                  const QString& method,
+                                  const QString& webUrl)
+{
+    // Already local? Just open it.
+    if (!studyUID.isEmpty()) {
+        const auto series = m_db->seriesOf(studyUID);
+        if (!series.isEmpty()) {
+            m_sourceCombo->setCurrentIndex(0);
+            loadSeries(m_db->series(
+                QString::fromStdString(series.first().seriesInstanceUID)));
+            m_statusLabel->setText(tr("Study already local — opened."));
+            return;
+        }
+    }
+    const QString outBase =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+        "/downloads";
+
+    // Shared post-retrieve step: index the download dir, switch to
+    // Local library, open the study's first series.
+    auto indexAndOpen = [this](const QString& uid, const QString& outDir) {
+        m_statusLabel->setText(tr("Retrieved — indexing..."));
+        scanAndList(outDir, [this, uid] {
+            m_sourceCombo->setCurrentIndex(0);
+            const auto sl = m_db->seriesOf(uid);
+            if (!sl.isEmpty())
+                loadSeries(m_db->series(
+                    QString::fromStdString(sl.first().seriesInstanceUID)));
+        });
+    };
+
+    // ── DICOMweb path ────────────────────────────────────────────────
+    // wado=http://host:8042/dicom-web — pull via QIDO + WADO-RS.
+    if (!webUrl.isEmpty()) {
+        auto* client = new DicomWebClient;
+        client->setBaseUrl(webUrl);
+        const QString outDir = outBase + "/" +
+            (studyUID.isEmpty() ? accession : studyUID);
+        m_statusLabel->setText(
+            tr("Retrieving via DICOMweb from %1...").arg(webUrl));
+        m_progress->setRange(0, 0);
+        m_progress->setVisible(true);
+
+        // Resolve studyUID via QIDO when only accession/patientID given.
+        auto pullStudy = [this, client, outDir, indexAndOpen](
+                             const QString& uid) {
+            client->retrieveStudy(uid, outDir,
+                [this](int done, int total) {
+                    QMetaObject::invokeMethod(this, [this, done, total] {
+                        m_progress->setRange(0, total);
+                        m_progress->setValue(done);
+                        m_statusLabel->setText(
+                            tr("DICOMweb: %1/%2 series").arg(done).arg(total));
+                    }, Qt::QueuedConnection);
+                },
+                [this, uid, outDir, indexAndOpen](const QString&) {
+                    QMetaObject::invokeMethod(this,
+                            [this, uid, outDir, indexAndOpen] {
+                        m_progress->setVisible(false);
+                        m_progress->setRange(0, 100);
+                        indexAndOpen(uid, outDir);
+                    }, Qt::QueuedConnection);
+                },
+                [this](const QString& err) {
+                    QMetaObject::invokeMethod(this, [this, err] {
+                        m_progress->setVisible(false);
+                        m_progress->setRange(0, 100);
+                        m_statusLabel->setText(
+                            tr("DICOMweb retrieve failed: %1").arg(err));
+                    }, Qt::QueuedConnection);
+                });
+        };
+
+        if (!studyUID.isEmpty()) {
+            pullStudy(studyUID);
+        } else if (!accession.isEmpty() || !patientID.isEmpty()) {
+            m_statusLabel->setText(tr("Looking up study via QIDO..."));
+            client->queryStudiesFiltered(accession, patientID, {},
+                [this, pullStudy](const QJsonArray& studies) {
+                    QMetaObject::invokeMethod(this,
+                            [this, studies, pullStudy] {
+                        if (studies.isEmpty()) {
+                            m_progress->setVisible(false);
+                            m_progress->setRange(0, 100);
+                            m_statusLabel->setText(
+                                tr("DICOMweb: study not found"));
+                            return;
+                        }
+                        const QString uid = DicomWebClient::tag(
+                            studies.first().toObject(), "0020000D");
+                        pullStudy(uid);
+                    }, Qt::QueuedConnection);
+                },
+                [this](const QString& err) {
+                    QMetaObject::invokeMethod(this, [this, err] {
+                        m_progress->setVisible(false);
+                        m_progress->setRange(0, 100);
+                        m_statusLabel->setText(
+                            tr("QIDO lookup failed: %1").arg(err));
+                    }, Qt::QueuedConnection);
+                });
+        } else {
+            m_statusLabel->setText(
+                tr("retrieve: need studyUID, accession, or patientID"));
+            delete client;
+            return;
+        }
+        // client is leaked deliberately — it must outlive the async work.
+        // Cleaned when the app exits; single-shot per URL launch.
+        return;
+    }
+
+    // ── DIMSE path ───────────────────────────────────────────────────
+    // Ad-hoc node from URI params takes priority — the RIS can point at
+    // any PACS without the user configuring it in Scanthia first.
+    DicomNode dn;
+    if (!host.isEmpty()) {
+        dn.name = host;
+        dn.node.host = host.toStdString();
+        dn.node.port = static_cast<uint16_t>(port > 0 ? port : 104);
+        dn.node.calledAET =
+            (aet.isEmpty() ? host : aet).toStdString();
+        dn.node.callingAET =
+            (callingAET.isEmpty() ? "SCANTHIA" : callingAET).toStdString();
+        dn.moveDestAET = callingAET.isEmpty() ? "SCANTHIA" : callingAET;
+        dn.retrieveMethod = method.isEmpty() ? "C-GET" : method;
+    } else {
+        // Saved node by name, else the configured default.
+        if (!nodeName.isEmpty())
+            dn = DicomNodes().get(nodeName);
+        if (dn.name.isEmpty())
+            dn = DicomNodes().defaultNode();
+        if (dn.name.isEmpty()) {
+            m_statusLabel->setText(
+                tr("retrieve: no PACS node configured — add one first"));
+            return;
+        }
+    }
+    const PacsNode node = dn.node;
+    const bool useGet = dn.retrieveMethod != "C-MOVE";
+    const QString dest = dn.moveDestAET;
+
+    auto doRetrieve = [this, node, useGet, dest, outBase, indexAndOpen](
+                          const QString& uid) {
+        const QString outDir = outBase + "/" + uid;
+        m_statusLabel->setText(tr("Retrieving %1...").arg(uid));
+        m_progress->setRange(0, 0);   // indeterminate until first response
+        m_progress->setVisible(true);
+        QtConcurrent::run([this, node, uid, outDir, useGet, dest] {
+            std::string err;
+            const bool ok =
+                useGet ? PacsClient().retrieveStudyGet(
+                             node, uid.toStdString(),
+                             outDir.toStdString(), &err)
+                       : PacsClient().retrieveStudyMove(
+                             node, uid.toStdString(),
+                             dest.toStdString(), &err);
+            QMetaObject::invokeMethod(this,
+                    [this, ok, err, outDir, uid] {
+                m_progress->setVisible(false);
+                m_progress->setRange(0, 100);
+                if (!ok) {
+                    m_statusLabel->setText(
+                        tr("Retrieve failed: %1").arg(err.c_str()));
+                    return;
+                }
+                m_statusLabel->setText(tr("Retrieved — indexing..."));
+                scanAndList(outDir, [this, uid] {
+                    m_sourceCombo->setCurrentIndex(0);
+                    const auto sl = m_db->seriesOf(uid);
+                    if (!sl.isEmpty())
+                        loadSeries(m_db->series(
+                            QString::fromStdString(
+                                sl.first().seriesInstanceUID)));
+                });
+            }, Qt::QueuedConnection);
+        });
+    };
+
+    // Fast path — UID given, skip the C-FIND.
+    if (!studyUID.isEmpty()) {
+        doRetrieve(studyUID);
+        return;
+    }
+    if (accession.isEmpty() && patientID.isEmpty()) {
+        m_statusLabel->setText(
+            tr("retrieve: need studyUID, accession, or patientID"));
+        return;
+    }
+    // Resolve the study UID via C-FIND on accession / patientID.
+    m_statusLabel->setText(
+        tr("Looking up study on %1...").arg(dn.name));
+    StudyQuery q;
+    if (!accession.isEmpty())  q.accession  = accession.toStdString();
+    if (!patientID.isEmpty())  q.patientID  = patientID.toStdString();
+    const QString nname = dn.name;
+    QtConcurrent::run([this, node, q, nname, doRetrieve] {
+        std::vector<StudyQueryResult> results;
+        std::string err;
+        const bool ok = PacsClient().queryStudies(node, q, results, &err);
+        QMetaObject::invokeMethod(this,
+                [this, ok, err, results, nname, doRetrieve] {
+            if (!ok) {
+                m_statusLabel->setText(
+                    tr("%1: lookup failed — %2").arg(nname).arg(err.c_str()));
+                return;
+            }
+            if (results.empty()) {
+                m_statusLabel->setText(
+                    tr("%1: study not found").arg(nname));
+                return;
+            }
+            doRetrieve(
+                QString::fromStdString(results.front().studyInstanceUID));
         }, Qt::QueuedConnection);
     });
 }
@@ -2425,6 +2652,8 @@ void MainWindow::openUrl(const QString& url)
 {
     // scanthia://open?path=<dir> — index + load.
     // scanthia://study/<uid>  — find in library and load.
+    // scanthia://retrieve?studyUID=<uid>&accession=<acc>&patientID=<id>
+    //                       &node=<name> — pull from PACS if not local.
     QString u = url;
     if (u.startsWith("scanthia://", Qt::CaseInsensitive))
         u = u.mid(11);
@@ -2443,6 +2672,46 @@ void MainWindow::openUrl(const QString& url)
         }
         if (!path.isEmpty())
             debugOpen(path);
+        return;
+    }
+    if (cmd.compare("retrieve", Qt::CaseInsensitive) == 0) {
+        QString studyUID, accession, patientID, node;
+        QString host, aet, callingAET, method, webUrl;
+        int port = 0;
+        for (const auto& kv : query.split('&')) {
+            const int eq = kv.indexOf('=');
+            const QString k = kv.left(eq);
+            const QString v =
+                QUrl::fromPercentEncoding(kv.mid(eq + 1).toUtf8());
+            if (k.compare("studyUID", Qt::CaseInsensitive) == 0 ||
+                k.compare("studyInstanceUID", Qt::CaseInsensitive) == 0)
+                studyUID = v;
+            else if (k.compare("accession", Qt::CaseInsensitive) == 0 ||
+                     k.compare("accessionNumber", Qt::CaseInsensitive) == 0)
+                accession = v;
+            else if (k.compare("patientID", Qt::CaseInsensitive) == 0)
+                patientID = v;
+            else if (k.compare("node", Qt::CaseInsensitive) == 0)
+                node = v;
+            else if (k.compare("host", Qt::CaseInsensitive) == 0)
+                host = v;
+            else if (k.compare("port", Qt::CaseInsensitive) == 0)
+                port = v.toInt();
+            else if (k.compare("aet", Qt::CaseInsensitive) == 0 ||
+                     k.compare("calledAET", Qt::CaseInsensitive) == 0)
+                aet = v;
+            else if (k.compare("callingAET", Qt::CaseInsensitive) == 0)
+                callingAET = v;
+            else if (k.compare("method", Qt::CaseInsensitive) == 0 ||
+                     k.compare("retrieveMethod", Qt::CaseInsensitive) == 0)
+                method = v;
+            else if (k.compare("wado", Qt::CaseInsensitive) == 0 ||
+                     k.compare("dicomweb", Qt::CaseInsensitive) == 0 ||
+                     k.compare("webUrl", Qt::CaseInsensitive) == 0)
+                webUrl = v;
+        }
+        retrieveFromNode(studyUID, accession, patientID, node,
+                         host, port, aet, callingAET, method, webUrl);
         return;
     }
     if (cmd.startsWith("study/", Qt::CaseInsensitive)) {
