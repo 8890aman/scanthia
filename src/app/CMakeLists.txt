@@ -16,6 +16,7 @@ target_link_libraries(Scanthia PRIVATE
     meda_ai
     Qt6::Widgets
     Qt6::Concurrent
+    Qt6::Network
     Qt6::OpenGLWidgets
     Qt6::Svg
     Qt6::PrintSupport

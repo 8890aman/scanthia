@@ -41,7 +41,8 @@ public:
     MainWindow();
     /// Testing hook: index a directory and load its first series.
     void debugOpen(const QString& dir);
-    /// Handle a scanthia:// URL — open?path=<dir> or study/<uid>.
+    /// Handle a scanthia:// URL — open?path=<dir>, study/<uid>,
+    /// or retrieve?studyUID=..&accession=..&patientID=..&node=..
     void openUrl(const QString& url);
 
 private:
@@ -82,6 +83,22 @@ private:
     void onSourceRefresh();
     void queryRemoteSource(const QString& filter);
     void retrieveRemoteStudy(const QString& studyUID);
+    /// RIS-launch retrieve: resolve studyUID (or look it up via
+    /// accession/patientID C-FIND), pull from `nodeName` (or default
+    /// node) if not local, then index + open.
+    /// If `host`/`port`/`aet` are set, uses them as an ad-hoc node —
+    /// no saved node required. If `webUrl` is set, pulls via
+    /// DICOMweb (QIDO + WADO) instead of DIMSE.
+    void retrieveFromNode(const QString& studyUID,
+                          const QString& accession,
+                          const QString& patientID,
+                          const QString& nodeName,
+                          const QString& host = {},
+                          int port = 0,
+                          const QString& aet = {},
+                          const QString& callingAET = {},
+                          const QString& method = {},
+                          const QString& webUrl = {});
     void exportSeriesZip(const QString& seriesUID, bool wholeStudy);
     /// Load `seriesUID`'s volume and fuse it (color overlay) onto the
     /// currently displayed volume.

@@ -6,6 +6,8 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QLocale>
 #include <QStandardPaths>
 #include <QSurfaceFormat>
@@ -81,18 +83,55 @@ int main(int argc, char** argv)
     meda::applyTheme(app);
     app.setWindowIcon(QIcon(":/icons/Scanthia.png"));
 
+    // Single instance: if Scanthia is already running, forward any
+    // scanthia:// URL to it over a local socket and exit — RIS links
+    // should open in the existing window, not spawn a second app.
+    const QString instKey = "scanthia-single-instance";
+    QStringList urlArgs;
+    const QStringList args = app.arguments();
+    for (const auto& a : args)
+        if (a.startsWith("scanthia:", Qt::CaseInsensitive))
+            urlArgs << a;
+    {
+        QLocalSocket probe;
+        probe.connectToServer(instKey);
+        if (probe.waitForConnected(500)) {
+            for (const auto& a : urlArgs) {
+                probe.write(a.toUtf8() + "\n");
+                probe.flush();
+            }
+            probe.waitForBytesWritten(2000);
+            return 0;   // forwarded — running instance handles it
+        }
+    }
+
     meda::MainWindow w;
     w.show();
+
+    // Listen for URLs forwarded by later launches.
+    auto* server = new QLocalServer(&w);
+    QLocalServer::removeServer(instKey);   // clean stale socket
+    server->listen(instKey);
+    QObject::connect(server, &QLocalServer::newConnection, &w, [&w, server] {
+        while (auto* s = server->nextPendingConnection()) {
+            QObject::connect(s, &QLocalSocket::readyRead, &w,
+                             [&w, s] {
+                while (s->canReadLine()) {
+                    const QString line =
+                        QString::fromUtf8(s->readLine()).trimmed();
+                    if (!line.isEmpty())
+                        w.openUrl(line);
+                }
+            });
+        }
+    });
+
     // --open <dir>: index and load the first series found (testing).
-    const QStringList args = app.arguments();
     const int oi = args.indexOf("--open");
     if (oi > 0 && oi + 1 < args.size())
         w.debugOpen(args.at(oi + 1));
     // scanthia:// URL — registered by the installer for RIS/HIS links.
-    for (const auto& a : args)
-        if (a.startsWith("scanthia:", Qt::CaseInsensitive)) {
-            w.openUrl(a);
-            break;
-        }
+    for (const auto& a : urlArgs)
+        w.openUrl(a);
     return app.exec();
 }
