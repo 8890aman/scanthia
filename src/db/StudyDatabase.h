@@ -38,6 +38,11 @@ public:
 
     QList<StudyRecord> studies() const;
     QList<SeriesMeta>  seriesOf(const QString& studyUID) const;
+    /// Series whose files were indexed from `dir` — used after a
+    /// retrieve, where the files' StudyInstanceUID may not match the
+    /// UID we requested (re-identified exports sometimes carry a
+    /// duplicate/aliased UID tag).
+    QList<SeriesMeta>  seriesInDir(const QString& dir) const;
     SeriesMeta         series(const QString& seriesUID) const;
     QByteArray         thumbnail(const QString& seriesUID) const;
 

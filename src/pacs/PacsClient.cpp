@@ -357,6 +357,9 @@ bool PacsClient::retrieveStudyGet(const PacsNode& node,
     scu.onProgress = onProgress;
     scu.configure(node);
     scu.setStorageDir(ofstr(outDir));
+    // Without this the default DCMSCU_STORAGE_IGNORE silently drops every
+    // C-STORE sub-operation that arrives over the C-GET association.
+    scu.setStorageMode(DCMSCU_STORAGE_DISK);
     scu.addPresentationContext(
         UID_GETPatientRootQueryRetrieveInformationModel, defaultXfers());
     // C-GET sub-operations arrive as C-STORE requests over THIS same

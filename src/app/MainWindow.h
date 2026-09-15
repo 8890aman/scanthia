@@ -31,6 +31,7 @@ class PacsDialog;
 class DicomWebDialog;
 class StoreScp;
 class ReceiverDock;
+class ConfigDock;
 class PluginManager;
 class InferenceEngine;
 class StudyDatabase;
@@ -50,6 +51,7 @@ private:
     void buildDock();
     void buildToolbar();
     void buildReceiverDock();
+    void buildConfigDock();
     void openFolder();
     void openFiles();
     void openCompareSeries();
@@ -147,6 +149,9 @@ private:
     ReceiverDock* m_receiverDock = nullptr;
     QDockWidget*  m_receiverDockWidget = nullptr;
     QAction*      m_receiverDockAction = nullptr;
+    ConfigDock*   m_configDock = nullptr;
+    QDockWidget*  m_configDockWidget = nullptr;
+    QAction*      m_configDockAction = nullptr;
     PluginManager* m_plugins;
     InferenceEngine* m_engine;
     StudyDatabase* m_db;
@@ -177,6 +182,7 @@ private:
     int           m_cineFps = 15;
     int           m_sliceSort = 0;   // 0=position 1=instance# 2=time 3=name
     std::atomic<int> m_loadGen{0};   // cancels in-flight series loads
+    std::atomic<int> m_repaintQueued{0};  // coalesces stream-load repaints
     void setCineFps(int fps);
 };
 
