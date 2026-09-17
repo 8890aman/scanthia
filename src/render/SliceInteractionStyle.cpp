@@ -134,7 +134,11 @@ void SliceInteractionStyle::OnLeftButtonDown()
     case Tool::Angle:
         if (pickPoint && onAngle) {
             auto p = pickPoint(pos[0], pos[1]);
-            if (onMeasureGrab && onMeasureGrab(p)) {
+            // Grab-to-edit only when not mid-creation — otherwise the
+            // 2nd/3rd clicks near the first arm get intercepted as
+            // handle edits and the angle never completes.
+            if (m_anglePts.empty() && onMeasureGrab &&
+                onMeasureGrab(p)) {
                 m_editing = true;
                 break;
             }
