@@ -1368,6 +1368,15 @@ void SliceViewer::rebuildAnno(Anno& an)
     const int    axis  = axisOf(m_orientation);
     const double plane = slicePlaneOffset();
     const int    u = (axis + 1) % 3, v = (axis + 2) % 3;
+    // Lift annotation geometry a hair off the slice plane along its
+    // normal — co-planar text/lines depth-fight with the image.
+    double nrm[3] = {0, 0, 1};
+    m_plane->GetNormal(nrm);
+    const double zoff = 0.15;
+    auto lift = [&](std::array<double,3>& p) {
+        for (int i = 0; i < 3; ++i)
+            p[i] += nrm[i] * zoff;
+    };
 
     auto* pd  = vtkPolyData::SafeDownCast(an.line->GetMapper()->GetInput());
     auto* hpd = vtkPolyData::SafeDownCast(
@@ -1383,18 +1392,22 @@ void SliceViewer::rebuildAnno(Anno& an)
         p[axis] = plane;
         return p;
     };
-    auto polyline = [&](const std::vector<std::array<double,3>>& lp) {
-        cells->InsertNextCell(vtkIdType(lp.size()));
-        for (const auto& p : lp)
+    auto polyline = [&](const std::vector<std::array<double,3>>& pl) {
+        cells->InsertNextCell(vtkIdType(pl.size()));
+        for (auto p : pl) {
+            lift(p);
             cells->InsertCellPoint(pts->InsertNextPoint(p.data()));
+        }
     };
-    auto handle = [&](const std::array<double,3>& p) {
+    auto handle = [&](std::array<double,3> p) {
+        lift(p);
         const vtkIdType id = hpts->InsertNextPoint(p.data());
         hcells->InsertNextCell(1, &id);
     };
 
     // Label spot: right of the shape bounds, vertically centred.
     double lp[3] = {0, 0, plane};
+    double shapeMinU = 0.0;   // left edge — fallback label side
     std::string label;
 
     if (an.kind == 0) {                      // distance line
@@ -1404,6 +1417,7 @@ void SliceViewer::rebuildAnno(Anno& an)
         handle(pb);
         lp[u] = std::max(pa[u], pb[u]) + 4.0;
         lp[v] = (pa[v] + pb[v]) / 2.0;
+        shapeMinU = std::min(pa[u], pb[u]);
         const double dx = an.p[0][0]-an.p[1][0],
                      dy = an.p[0][1]-an.p[1][1],
                      dz = an.p[0][2]-an.p[1][2];
@@ -1429,6 +1443,7 @@ void SliceViewer::rebuildAnno(Anno& an)
         handle(c00); handle(c10); handle(c11); handle(c01);
         lp[u] = hi[u] + 4.0;
         lp[v] = (lo[v] + hi[v]) / 2.0;
+        shapeMinU = lo[u];
 
         // Voxel stats inside the rect on this slice.
         if (m_volume) {
@@ -1531,6 +1546,7 @@ void SliceViewer::rebuildAnno(Anno& an)
             }
             lp[u] = std::max({pa[u], pb[u], pc[u]}) + 4.0;
             lp[v] = pb[v];
+            shapeMinU = std::min({pa[u], pb[u], pc[u]});
         }
     }
 
@@ -1541,6 +1557,19 @@ void SliceViewer::rebuildAnno(Anno& an)
     pd->Modified();
     hpd->Modified();
 
+    // Keep the label inside the image bounds: if the right-of-shape
+    // spot would run off the edge, flip it to the shape's left.
+    if (m_volume && !label.empty()) {
+        const double uMax =
+            m_volume->extent()[u] * m_volume->spacing()[u];
+        if (lp[u] + 4.0 > uMax) {
+            const double w = 2.4 * double(label.size()) + 6.0;
+            lp[u] = std::max(2.0, shapeMinU - w);
+        }
+    }
+    // Lift the label off the image plane too (same z-fight).
+    for (int i = 0; i < 3; ++i)
+        lp[i] += nrm[i] * zoff;
     an.text->SetInput(label.c_str());
     an.text->SetPosition(lp);
     const bool vis = (an.slice == m_slice);
