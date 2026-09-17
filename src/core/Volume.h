@@ -37,8 +37,17 @@ public:
     std::array<int, 3> extent() const;
     /// Voxel spacing in mm.
     std::array<double, 3> spacing() const;
+    /// False when the source carried no pixel-spacing tag (typical for
+    /// JPEG-wrapped secondary captures and uncalibrated projection
+    /// images): the image sits on a 1 unit/px grid and distances are
+    /// really in pixels, not mm.
+    bool spacingCalibrated() const { return m_spacingCalibrated; }
+    void setSpacingCalibrated(bool on) { m_spacingCalibrated = on; }
     /// Scalar range over the whole volume.
     std::array<double, 2> scalarRange() const;
+    /// Robust display range for images without DICOM W/L: histogram
+    /// percentiles over sampled voxels, excluding pixel padding. Cached.
+    std::array<double, 2> autoWindowRange() const;
 
     /// IJK <-> world (LPS patient) coordinates.
     void ijkToWorld(const std::array<double,3>& ijk, std::array<double,3>& world) const;
@@ -61,6 +70,8 @@ private:
     vtkSmartPointer<vtkImageData>   m_sharpened;
     SeriesMeta                      m_meta;
     bool                            m_downsampled = false;
+    bool                            m_spacingCalibrated = true;
+    mutable std::array<double,2>    m_autoRange{-1.0, -1.0};
     std::array<int, 3>              m_fullExtent{0, 0, 0};
 };
 

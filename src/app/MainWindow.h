@@ -72,6 +72,7 @@ private:
     void loadCompareSeries(const QString& seriesUID);
     void setLayout(int which); // 0 = single, 1 = MPR
     void applyPreset(const WindowPreset& p);
+    void rebuildPresetsMenu();   // scope CT presets to CT series
     void setTool(Tool t);
     void runPlugin(const QString& name);
     void loadOnnxModel();
@@ -163,12 +164,14 @@ private:
     QHBoxLayout*  m_singleLay = nullptr;
     void popOutCompare(bool on);
     QMenu*        m_pluginMenu;
+    QMenu*        m_presetMenu = nullptr;   // rebuilt per modality
     QTimer*       m_incomingTimer = nullptr;
     bool          m_overlayActive = false;
     Segmentation  m_overlay;
     // Fusion layer (e.g. PET on CT) — kept alive for the viewer pipeline.
     vtkSmartPointer<vtkImageData>    m_fusionImg;
     vtkSmartPointer<vtkLookupTable>  m_fusionLut;
+    QString                          m_fusionName;   // overlaid series
     QString       m_modelPath;       // loaded ONNX model path
     QLabel*       m_modelStatus;     // shows loaded model name in status bar
     QMenu*        m_modelMenu = nullptr;

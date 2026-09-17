@@ -41,9 +41,11 @@ private:
 
     // Viewer
     QComboBox*       m_sliceSort;
+    QComboBox*       m_openIn;
     QDoubleSpinBox*  m_memBudget;   // GB
     QSpinBox*        m_cineFps;
     QCheckBox*       m_showPlanes;
+    QCheckBox*       m_showScale;
 };
 
 } // namespace meda

@@ -3,10 +3,12 @@
 #include "SliceInteractionStyle.h"
 #include "Segmentation.h"
 
+#include <vtkProperty2D.h>
 #include <vtkCallbackCommand.h>
 #include <vtkCamera.h>
 #include <vtkCellArray.h>
 #include <vtkCommand.h>
+#include <vtkCoordinate.h>
 #include <vtkImageMapToColors.h>
 #include <vtkImageProperty.h>
 #include <vtkLineSource.h>
@@ -19,10 +21,12 @@
 #include <vtkInteractorObserver.h>
 #include <vtkRenderWindowInteractor.h>
 
+#include <QColor>
 #include <QJsonArray>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QGestureEvent>
+#include <QResizeEvent>
 #include <QPinchGesture>
 #include <QPanGesture>
 
@@ -111,53 +115,58 @@ SliceViewer::SliceViewer(QWidget* parent)
 
     m_crossLineH = makeLineActor(0.2, 0.9, 0.9);
     m_crossLineV = makeLineActor(0.9, 0.7, 0.2);
-    m_measureLine = makeLineActor(1.0, 0.85, 0.1);
-    m_measureLine->GetProperty()->SetLineWidth(2.0f);
     m_renderer->AddActor(m_crossLineH);
     m_renderer->AddActor(m_crossLineV);
-    m_renderer->AddActor(m_measureLine);
-
-    m_measureLine2 = makeLineActor(1.0, 0.85, 0.1);
-    m_measureLine2->GetProperty()->SetLineWidth(2.0f);
-    m_renderer->AddActor(m_measureLine2);
-
-    m_measureText = vtkSmartPointer<vtkBillboardTextActor3D>::New();
-    m_measureText->GetTextProperty()->SetColor(0.91, 0.64, 0.24);
-    m_measureText->GetTextProperty()->SetFontSize(14);
-    m_measureText->GetTextProperty()->BoldOn();
-    m_measureText->SetVisibility(0);
-    m_renderer->AddActor(m_measureText);
-
-    // ROI rectangle: closed 5-point polyline on the slice plane.
-    m_roiPts = vtkSmartPointer<vtkPoints>::New();
-    m_roiPts->SetNumberOfPoints(5);
-    auto roiCells = vtkSmartPointer<vtkCellArray>::New();
-    roiCells->InsertNextCell(5);
-    for (int i = 0; i < 5; ++i)
-        roiCells->InsertCellPoint(i);
-    auto roiPd = vtkSmartPointer<vtkPolyData>::New();
-    roiPd->SetPoints(m_roiPts);
-    roiPd->SetLines(roiCells);
-    auto roiMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
-    roiMapper->SetInputData(roiPd);
-    m_roiRect = vtkSmartPointer<vtkActor>::New();
-    m_roiRect->SetMapper(roiMapper);
-    m_roiRect->GetProperty()->SetColor(0.18, 0.80, 0.44);
-    m_roiRect->GetProperty()->SetLineWidth(2.0f);
-    m_roiRect->SetVisibility(0);
-    m_renderer->AddActor(m_roiRect);
-
-    m_roiText = vtkSmartPointer<vtkBillboardTextActor3D>::New();
-    m_roiText->GetTextProperty()->SetColor(0.18, 0.80, 0.44);
-    m_roiText->GetTextProperty()->SetFontSize(13);
-    m_roiText->GetTextProperty()->BoldOn();
-    m_roiText->SetVisibility(0);
-    m_renderer->AddActor(m_roiText);
 
     m_corner = vtkSmartPointer<vtkCornerAnnotation>::New();
     m_corner->GetTextProperty()->SetColor(0.90, 0.92, 0.94);
-    m_corner->GetTextProperty()->SetFontSize(12);
+    m_corner->GetTextProperty()->SetFontSize(11);
+    // CornerAnnotation scales its font with window size — cap it small.
+    m_corner->SetMaximumFontSize(11);
+    m_corner->SetLinearFontScaleFactor(0.75);
+    m_corner->SetNonlinearFontScaleFactor(0.25);
     m_renderer->AddActor2D(m_corner);
+
+    // Weasis-style scale ruler: a fixed "nice" length bar (20 cm, 10 cm,
+    // 5 mm…) drawn in display pixels — dark outline pass under a white
+    // pass, like Weasis's outlined strokes. Rebuilt on zoom/resize.
+    m_rulerPts = vtkSmartPointer<vtkPoints>::New();
+    m_rulerPd  = vtkSmartPointer<vtkPolyData>::New();
+    m_rulerPd->SetPoints(m_rulerPts);
+    {
+        auto coord = vtkSmartPointer<vtkCoordinate>::New();
+        coord->SetCoordinateSystemToDisplay();
+        auto mapper = vtkSmartPointer<vtkPolyDataMapper2D>::New();
+        mapper->SetInputData(m_rulerPd);
+        mapper->SetTransformCoordinate(coord);
+        m_rulerDark = vtkSmartPointer<vtkActor2D>::New();
+        m_rulerDark->SetMapper(mapper);
+        m_rulerDark->GetProperty()->SetColor(0, 0, 0);
+        m_rulerDark->GetProperty()->SetLineWidth(4.0f);
+        m_rulerDark->GetProperty()->SetOpacity(0.85);
+        m_rulerLight = vtkSmartPointer<vtkActor2D>::New();
+        m_rulerLight->SetMapper(mapper);
+        m_rulerLight->GetProperty()->SetColor(0.93, 0.94, 0.96);
+        m_rulerLight->GetProperty()->SetLineWidth(1.3f);
+        m_rulerDark->SetVisibility(0);
+        m_rulerLight->SetVisibility(0);
+        m_renderer->AddActor2D(m_rulerDark);
+        m_renderer->AddActor2D(m_rulerLight);
+
+        auto makeLabel = [this]() {
+            auto t = vtkSmartPointer<vtkTextActor>::New();
+            auto* tp = t->GetTextProperty();
+            tp->SetColor(0.93, 0.94, 0.96);
+            tp->SetFontSize(11);
+            tp->ShadowOn();           // dark offset behind the text
+            tp->SetShadowOffset(1, -1);
+            t->SetVisibility(0);
+            m_renderer->AddActor2D(t);
+            return t;
+        };
+        m_rulerLabelH = makeLabel();
+        m_rulerLabelV = makeLabel();
+    }
 
     // Amber "FLIPPED" marker, fixed at bottom-left above the WW/WL text.
     m_flipBadge = vtkSmartPointer<vtkTextActor>::New();
@@ -179,9 +188,27 @@ SliceViewer::SliceViewer(QWidget* parent)
     m_downsampleBadge->SetVisibility(0);
     m_renderer->AddActor2D(m_downsampleBadge);
 
-    // Orientation labels on the 4 view edges (R/L/A/P/H/F).
-    const double pos[4][2] = {{0.015, 0.5}, {0.985, 0.5}, {0.5, 0.97},
-                              {0.5, 0.03}};
+    // Orange "FUSION" marker — compact 2-line block, top-centre: clear
+    // of the corner metadata and the edge rulers.
+    m_fusionBadge = vtkSmartPointer<vtkTextActor>::New();
+    auto* ftp = m_fusionBadge->GetTextProperty();
+    ftp->SetColor(1.0, 0.55, 0.20);
+    ftp->SetFontSize(10);
+    ftp->BoldOn();
+    ftp->ShadowOn();
+    ftp->SetShadowOffset(1, -1);
+    ftp->SetJustificationToCentered();
+    ftp->SetVerticalJustificationToTop();
+    m_fusionBadge->GetPositionCoordinate()
+        ->SetCoordinateSystemToNormalizedViewport();
+    m_fusionBadge->SetPosition(0.5, 0.975);
+    m_fusionBadge->SetVisibility(0);
+    m_renderer->AddActor2D(m_fusionBadge);
+
+    // Orientation labels on the 4 view edges (R/L/A/P/H/F). Inset far
+    // enough to clear the scale-ruler bars at the view edges.
+    const double pos[4][2] = {{0.055, 0.5}, {0.945, 0.5}, {0.5, 0.93},
+                              {0.5, 0.065}};
     for (int i = 0; i < 4; ++i) {
         m_dirLabel[i] = vtkSmartPointer<vtkTextActor>::New();
         m_dirLabel[i]->GetPositionCoordinate()
@@ -238,6 +265,19 @@ SliceViewer::SliceViewer(QWidget* parent)
         std::array<double,3> ijk;
         m_volume->worldToIjk(p, ijk);
         emit crosshairMoved(ijk);
+    };
+    m_style->onMeasureStart = [this](int kind) { beginAnno(kind); };
+    m_style->onMeasureGrab  = [this](std::array<double,3> p) {
+        const auto hit = pickAnnoHandle(p);
+        if (hit.first >= 0) {
+            m_editAnno = hit.first;
+            m_editPt   = hit.second;
+            return true;
+        }
+        return false;
+    };
+    m_style->onMeasureEdit = [this](std::array<double,3> p) {
+        editAnnoPoint(m_editAnno, m_editPt, p);
     };
     m_style->onMeasured = [this](std::array<double,3> a,
                                  std::array<double,3> b) {
@@ -357,12 +397,175 @@ void SliceViewer::endInteraction()
     m_renderWindow->Render();
 }
 
+void SliceViewer::setScaleVisible(bool on)
+{
+    m_scaleVisible = on;
+    updateScaleRuler();
+    m_renderWindow->Render();
+}
+
+// Weasis-style ruler: a fixed "nice" physical length (1-2-5 sequence)
+// drawn as a centred bar on the bottom and left view edges, with
+// end caps, mid ticks and 1/10 subticks. Rebuilt whenever the zoom or
+// window size changes. Hidden for unscaled volumes — labels would lie.
+void SliceViewer::updateScaleRuler()
+{
+    auto hideAll = [this] {
+        m_rulerDark->SetVisibility(0);
+        m_rulerLight->SetVisibility(0);
+        m_rulerLabelH->SetVisibility(0);
+        m_rulerLabelV->SetVisibility(0);
+    };
+    if (!m_scaleVisible || !m_volume ||
+        !m_volume->spacingCalibrated() ||
+        !m_imageActor->GetVisibility()) {
+        hideAll();
+        return;
+    }
+    auto* cam = m_renderer->GetActiveCamera();
+    if (!cam || !cam->GetParallelProjection()) {
+        hideAll();
+        return;
+    }
+    const int* sz = m_renderWindow->GetSize();
+    if (sz[0] < 160 || sz[1] < 160) {
+        hideAll();
+        return;
+    }
+    const double mmPerPx = cam->GetParallelScale() * 2.0 / sz[1];
+
+    // Largest 1-2-5 length (mm) whose on-screen size fits maxPx.
+    auto niceBar = [](double mmPerPx, double maxPx, double& mm) {
+        const double maxMm = maxPx * mmPerPx;
+        if (maxMm <= 0.0) { mm = 0.0; return 0.0; }
+        double len = std::pow(10.0, int(std::log10(maxMm)) + 1);
+        double px  = len / mmPerPx;
+        for (int guard = 0; px > maxPx && guard < 60; ++guard) {
+            const double first =
+                len / std::pow(10.0, std::floor(std::log10(len)) + 1e-12);
+            len /= (first > 4.9 && first < 5.1) ? 2.5 : 2.0;
+            px = len / mmPerPx;
+        }
+        if (px > maxPx) { mm = 0.0; return 0.0; }
+        mm = len;
+        return px;
+    };
+    // "20 cm" style label; also yields the tick divisor (Weasis:
+    // labels containing 5 → 5 divisions, containing 2 → 2, else 10).
+    auto label = [](double mm, int& divisor) {
+        QString s;
+        if (mm >= 10.0) {
+            const double cm = mm / 10.0;
+            s = (cm == int(cm) ? QString::number(int(cm))
+                               : QString::number(cm)) + " cm";
+        } else {
+            s = (mm == int(mm) ? QString::number(int(mm))
+                               : QString::number(mm, 'f', 1)) + " mm";
+        }
+        divisor = s.contains('5') ? 5 : s.contains('2') ? 2 : 10;
+        return s;
+    };
+
+    const int  axis = axisOf(m_orientation);
+    const int  u = (axis + 1) % 3, v = (axis + 2) % 3;
+    const auto ext = m_volume->extent();
+    const auto sp  = m_volume->spacing();
+    const double imgWpx = ext[u] * sp[u] / mmPerPx;
+    const double imgHpx = ext[v] * sp[v] / mmPerPx;
+
+    const double capLen = 15.0, midLen = 10.0, subLen = 5.0;
+    const double edge = 16.0;
+
+    m_rulerPts->Reset();
+    auto cells = vtkSmartPointer<vtkCellArray>::New();
+    auto seg = [&](double x0, double y0, double x1, double y1) {
+        const vtkIdType ids[2] = {m_rulerPts->InsertNextPoint(x0, y0, 0),
+                                  m_rulerPts->InsertNextPoint(x1, y1, 0)};
+        cells->InsertNextCell(2, ids);
+    };
+
+    bool anyBar = false;
+    // --- Bottom bar, centred on the bottom edge ---
+    double mmH = 0.0;
+    const double barH = niceBar(mmPerPx, std::min(imgWpx, sz[0] / 2.0),
+                                mmH);
+    if (barH > 50.0) {
+        int div;
+        const QString s = label(mmH, div);
+        const double x0 = sz[0] / 2.0 - barH / 2.0, y0 = edge;
+        seg(x0, y0, x0 + barH, y0);
+        seg(x0, y0, x0, y0 + capLen);
+        seg(x0 + barH, y0, x0 + barH, y0 + capLen);
+        const double step = barH / div;
+        for (int i = 1; i < div; ++i)
+            seg(x0 + step * i, y0, x0 + step * i, y0 + midLen);
+        if (step > 90.0) {
+            const double sub = step / 10.0;
+            for (int i = 0; i < div; ++i)
+                for (int k = 1; k < 10; ++k)
+                    seg(x0 + step * i + sub * k, y0,
+                        x0 + step * i + sub * k, y0 + subLen);
+        }
+        m_rulerLabelH->SetInput(s.toUtf8().constData());
+        m_rulerLabelH->SetDisplayPosition(int(x0 + barH + 6),
+                                          int(y0 - 2));
+        m_rulerLabelH->SetVisibility(1);
+        anyBar = true;
+    } else {
+        m_rulerLabelH->SetVisibility(0);
+    }
+
+    // --- Left bar, centred on the left edge ---
+    double mmV = 0.0;
+    const double barV = niceBar(mmPerPx, std::min(imgHpx, sz[1] / 2.0),
+                                mmV);
+    if (barV > 30.0) {
+        int div;
+        const QString s = label(mmV, div);
+        const double x0 = edge, y0 = sz[1] / 2.0 - barV / 2.0;
+        seg(x0, y0, x0, y0 + barV);
+        seg(x0, y0, x0 + capLen, y0);
+        seg(x0, y0 + barV, x0 + capLen, y0 + barV);
+        const double step = barV / div;
+        for (int i = 1; i < div; ++i)
+            seg(x0, y0 + step * i, x0 + midLen, y0 + step * i);
+        if (step > 90.0) {
+            const double sub = step / 10.0;
+            for (int i = 0; i < div; ++i)
+                for (int k = 1; k < 10; ++k)
+                    seg(x0, y0 + step * i + sub * k,
+                        x0 + subLen, y0 + step * i + sub * k);
+        }
+        m_rulerLabelV->SetInput(s.toUtf8().constData());
+        m_rulerLabelV->SetDisplayPosition(int(x0 + 4),
+                                          int(y0 + barV + 6));
+        m_rulerLabelV->SetVisibility(1);
+        anyBar = true;
+    } else {
+        m_rulerLabelV->SetVisibility(0);
+    }
+
+    if (!anyBar) {
+        hideAll();
+        return;
+    }
+    m_rulerPd->SetLines(cells);
+    m_rulerPd->Modified();
+    m_rulerDark->SetVisibility(1);
+    m_rulerLight->SetVisibility(1);
+}
+
 void SliceViewer::setVolume(const VolumePtr& vol, Orientation o)
 {
     m_volume = vol;
     m_imageActor->SetVisibility(vol != nullptr);
-    if (!vol)
+    if (!vol) {
+        updateScaleRuler();
         return;
+    }
+    // Crosshair starts at the volume centre, not the corner.
+    const auto ext = vol->extent();
+    m_crosshairIjk = {ext[0] / 2.0, ext[1] / 2.0, ext[2] / 2.0};
     m_mapper->SetInputData(m_smoothing ? vol->sharpenedVtk()
                                        : vol->vtkImage());
     setOrientation(o);
@@ -372,7 +575,9 @@ void SliceViewer::setVolume(const VolumePtr& vol, Orientation o)
     updatePlaneOrigin();
     clearAnnotations();
     autoWindowLevel();
-    m_renderer->ResetCamera();
+    // setupCamera (via setOrientation) already centres + fits; a
+    // ResetCamera here would refit without the margin.
+    updateScaleRuler();
 }
 
 void SliceViewer::setOrientation(Orientation o)
@@ -471,7 +676,12 @@ void SliceViewer::setupCamera()
     const double spans[3] = {b[1] - b[0], b[3] - b[2], b[5] - b[4]};
     const int axis = axisOf(m_orientation);
     const int u = (axis + 1) % 3, v = (axis + 2) % 3;
-    const double fitSpan = std::max(spans[u], spans[v]) / 2.0;
+    // Fit BOTH axes inside the view (parallel scale governs height) with
+    // a small margin so the image sits centred with breathing room.
+    const int* sz = m_renderWindow->GetSize();
+    const double aspect = (sz[1] > 0) ? double(sz[0]) / sz[1] : 1.0;
+    const double fitSpan =
+        std::max(spans[v] / 2.0, spans[u] / (2.0 * aspect)) * 1.08;
     const double dist = 2.0 * std::sqrt(spans[0] * spans[0] +
                                         spans[1] * spans[1] +
                                         spans[2] * spans[2]);
@@ -487,6 +697,7 @@ void SliceViewer::setupCamera()
     m_renderer->ResetCameraClippingRange();
     updateCrosshairActors();
     updateOrientationLabels();
+    updateScaleRuler();
 }
 
 // Anatomical direction labels (volume is canonical LPS: +X=L +Y=P +Z=S).
@@ -596,7 +807,14 @@ void SliceViewer::zoomBy(double factor)
     if (!cam)
         return;
     cam->SetParallelScale(cam->GetParallelScale() * factor);
+    updateScaleRuler();
     m_renderWindow->Render();
+}
+
+void SliceViewer::resizeEvent(QResizeEvent* e)
+{
+    QVTKOpenGLNativeWidget::resizeEvent(e);
+    updateScaleRuler();   // mm-per-pixel changed → rebuild the ruler
 }
 
 void SliceViewer::setSlice(int s)
@@ -611,8 +829,16 @@ void SliceViewer::setSlice(int s)
     beginInteraction();
     m_lodIdleTimer.start();
 
-    if (!m_scrollAnim.isActive())
+    if (m_cineTimer.isActive()) {
+        // Cine: snap straight to the slice — the easing animation costs
+        // extra renders per frame and judders at playback speed.
+        m_scrollAnim.stop();
+        m_planePos = clamped * m_volume->spacing()[axisOf(m_orientation)];
+        updatePlaneOrigin();
+        m_renderWindow->Render();
+    } else if (!m_scrollAnim.isActive()) {
         m_scrollAnim.start();
+    }
 
     updateCrosshairActors();
     updateCornerText();
@@ -657,7 +883,8 @@ void SliceViewer::autoWindowLevel()
     if (meta.hasWindowing) {
         setWindowLevel(meta.windowWidth, meta.windowCenter);
     } else {
-        auto r = m_volume->scalarRange();
+        // Percentile fit — excludes pixel padding and hot-voxel outliers.
+        auto r = m_volume->autoWindowRange();
         setWindowLevel(std::max(1.0, r[1] - r[0]), (r[0] + r[1]) * 0.5);
     }
     // Inverted grayscale for MONOCHROME1 images.
@@ -676,11 +903,32 @@ void SliceViewer::autoWindowLevel()
 void SliceViewer::setActiveTool(Tool t)
 {
     m_style->SetTool(t);
-    if (t != Tool::Measure) {
-        m_measureLine->SetVisibility(0);
-        m_measureText->SetVisibility(0);
-        m_renderWindow->Render();
+    const bool measTool =
+        (t == Tool::Measure || t == Tool::Roi || t == Tool::Angle);
+    // Weasis: handles only while the shape can be edited (a measure
+    // tool active + shape on this slice); the shape itself persists.
+    for (auto& an : m_annos) {
+        const bool on = measTool && an.slice == m_slice;
+        an.handles->SetVisibility(on);
+        an.handlesInner->SetVisibility(on);
     }
+    // Drop a degenerate draft (press with no drag → zero-length line).
+    if (m_draftAnno >= 0 && m_draftAnno < int(m_annos.size())) {
+        auto& an = m_annos[size_t(m_draftAnno)];
+        bool degenerate = an.npts == 0;
+        if (!degenerate && an.kind != 2) {
+            const double dx = an.p[0][0]-an.p[1][0],
+                         dy = an.p[0][1]-an.p[1][1],
+                         dz = an.p[0][2]-an.p[1][2];
+            degenerate = std::sqrt(dx*dx + dy*dy + dz*dz) < 1e-6;
+        }
+        if (degenerate) {
+            removeAnnoActors(an);
+            m_annos.erase(m_annos.begin() + m_draftAnno);
+        }
+    }
+    m_draftAnno = m_editAnno = -1;
+    m_renderWindow->Render();
 }
 
 Tool SliceViewer::activeTool() const
@@ -702,6 +950,13 @@ void SliceViewer::setCineFps(int fps)
 void SliceViewer::setShowCrosshair(bool on)
 {
     m_showCrosshair = on;
+    // Toggling on with no prior position → centre of the volume.
+    if (on && m_volume && m_crosshairIjk[0] == 0.0 &&
+        m_crosshairIjk[1] == 0.0 && m_crosshairIjk[2] == 0.0) {
+        const auto ext = m_volume->extent();
+        m_crosshairIjk = {ext[0] / 2.0, ext[1] / 2.0, ext[2] / 2.0};
+    }
+    updateCrosshairActors();
     m_crossLineH->SetVisibility(on ? 1 : 0);
     m_crossLineV->SetVisibility(on ? 1 : 0);
     m_renderWindow->Render();
@@ -709,41 +964,21 @@ void SliceViewer::setShowCrosshair(bool on)
 
 void SliceViewer::clearAnnotations()
 {
-    m_measureLine->SetVisibility(0);
-    m_measureLine2->SetVisibility(0);
-    m_roiRect->SetVisibility(0);
-    m_measureText->SetVisibility(0);
-    m_roiText->SetVisibility(0);
-    m_annoMeasure = m_annoRoi = m_annoAngle = false;
-    m_annoSlice = -1;
-    m_lastAnno = LastAnno::None;
+    for (auto& an : m_annos)
+        removeAnnoActors(an);
+    m_annos.clear();
+    m_draftAnno = m_editAnno = -1;
     m_renderWindow->Render();
     emit annotationsChanged();
 }
 
 void SliceViewer::undoAnnotation()
 {
-    switch (m_lastAnno) {
-    case LastAnno::Measure:
-        m_measureLine->SetVisibility(0);
-        m_measureText->SetVisibility(0);
-        m_annoMeasure = false;
-        break;
-    case LastAnno::Roi:
-        m_roiRect->SetVisibility(0);
-        m_roiText->SetVisibility(0);
-        m_annoRoi = false;
-        break;
-    case LastAnno::Angle:
-        m_measureLine->SetVisibility(0);
-        m_measureLine2->SetVisibility(0);
-        m_measureText->SetVisibility(0);
-        m_annoAngle = false;
-        break;
-    case LastAnno::None:
+    if (m_annos.empty())
         return;
-    }
-    m_lastAnno = LastAnno::None;
+    removeAnnoActors(m_annos.back());
+    m_annos.pop_back();
+    m_draftAnno = m_editAnno = -1;
     m_renderWindow->Render();
     emit annotationsChanged();   // persist the removal
 }
@@ -752,12 +987,16 @@ void SliceViewer::updateAnnotationVisibility()
 {
     // Annotations live on the slice where they were drawn — hide them on
     // other slices instead of letting the label float over new anatomy.
-    const bool here = (m_annoSlice == m_slice);
-    m_measureLine->SetVisibility(here && (m_annoMeasure || m_annoAngle));
-    m_measureLine2->SetVisibility(here && m_annoAngle);
-    m_roiRect->SetVisibility(here && m_annoRoi);
-    m_measureText->SetVisibility(here && (m_annoMeasure || m_annoAngle));
-    m_roiText->SetVisibility(here && m_annoRoi);
+    const bool measTool = (m_style->GetTool() == Tool::Measure ||
+                           m_style->GetTool() == Tool::Roi ||
+                           m_style->GetTool() == Tool::Angle);
+    for (auto& an : m_annos) {
+        const bool here = (an.slice == m_slice);
+        an.line->SetVisibility(here ? 1 : 0);
+        an.handles->SetVisibility(here && measTool ? 1 : 0);
+        an.handlesInner->SetVisibility(here && measTool ? 1 : 0);
+        an.text->SetVisibility(here ? 1 : 0);
+    }
 }
 
 void SliceViewer::setCrosshairIjk(const std::array<double,3>& ijk)
@@ -826,9 +1065,30 @@ void SliceViewer::setInfoText(const QString& text)
     m_renderWindow->Render();
 }
 
+void SliceViewer::setStudyText(const QString& text)
+{
+    m_studyText = text;
+    updateCornerText();
+    m_renderWindow->Render();
+}
+
+void SliceViewer::setSeriesText(const QString& text)
+{
+    m_corner->SetText(1, text.toUtf8().constData());
+    m_renderWindow->Render();
+}
+
 void SliceViewer::setFlipBadge(bool on)
 {
     m_flipBadge->SetVisibility(on);
+    m_renderWindow->Render();
+}
+
+void SliceViewer::setFusionBadge(const QString& name)
+{
+    m_fusionBadge->SetInput(
+        name.isEmpty() ? "" : ("FUSION: " + name).toUtf8().constData());
+    m_fusionBadge->SetVisibility(name.isEmpty() ? 0 : 1);
     m_renderWindow->Render();
 }
 
@@ -947,7 +1207,11 @@ void SliceViewer::updateCornerText()
     std::snprintf(buf, sizeof(buf), "Slice %d / %d   Loc: %.1f mm",
                   m_slice + 1, sliceCount(),
                   m_slice * m_volume->spacing()[axisOf(m_orientation)]);
-    m_corner->SetText(3, buf);
+    std::string tr = m_studyText.toUtf8().constData();
+    if (!tr.empty())
+        tr += "\n";
+    tr += buf;
+    m_corner->SetText(3, tr.c_str());
     if (m_slabType != 0 && m_slabMm > 0) {
         const char* names[] = {"", "AVG", "MIP", "MinIP"};
         std::snprintf(buf, sizeof(buf), "WW %.0f  WL %.0f   %s %.0fmm",
@@ -958,210 +1222,422 @@ void SliceViewer::updateCornerText()
     m_corner->SetText(0, buf);
 }
 
+// ------------------------------------------------------------------
+// Weasis-style annotations: a list of shapes per slice, each drawn as
+// a polyline + square handle glyphs + a world-space label placed to
+// the right of the shape bounds, vertically centred (Weasis's
+// AbstractGraphic.setLabel convention).
+// ------------------------------------------------------------------
+
+/// Allocate the three actors an annotation needs (line, handle glyphs,
+/// label) and attach them to the renderer.
+void SliceViewer::addAnnoActors(Anno& an, double r, double g, double b)
+{
+    auto pts = vtkSmartPointer<vtkPoints>::New();
+    auto cells = vtkSmartPointer<vtkCellArray>::New();
+    auto pd = vtkSmartPointer<vtkPolyData>::New();
+    pd->SetPoints(pts);
+    pd->SetLines(cells);
+    auto mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+    mapper->SetInputData(pd);
+    an.line = vtkSmartPointer<vtkActor>::New();
+    an.line->SetMapper(mapper);
+    an.line->GetProperty()->SetColor(r, g, b);
+    an.line->GetProperty()->SetLineWidth(2.0f);
+    m_renderer->AddActor(an.line);
+
+    auto hpts = vtkSmartPointer<vtkPoints>::New();
+    auto hcells = vtkSmartPointer<vtkCellArray>::New();
+    auto hpd = vtkSmartPointer<vtkPolyData>::New();
+    hpd->SetPoints(hpts);
+    hpd->SetVerts(hcells);
+    auto hm = vtkSmartPointer<vtkPolyDataMapper>::New();
+    hm->SetInputData(hpd);
+    an.handles = vtkSmartPointer<vtkActor>::New();
+    an.handles->SetMapper(hm);
+    an.handles->GetProperty()->SetColor(r, g, b);
+    an.handles->GetProperty()->SetPointSize(9);   // square GL points
+    m_renderer->AddActor(an.handles);
+    // Bright inner square → Weasis-style bordered handle.
+    an.handlesInner = vtkSmartPointer<vtkActor>::New();
+    an.handlesInner->SetMapper(hm);   // shares the handle polydata
+    an.handlesInner->GetProperty()->SetColor(0.95, 0.95, 0.95);
+    an.handlesInner->GetProperty()->SetPointSize(4);
+    m_renderer->AddActor(an.handlesInner);
+
+    an.text = vtkSmartPointer<vtkBillboardTextActor3D>::New();
+    auto* tp = an.text->GetTextProperty();
+    tp->SetColor(r, g, b);
+    tp->SetFontSize(13);
+    tp->BoldOn();
+    tp->ShadowOn();
+    // Dark translucent chip behind the text — readable on bright tissue.
+    tp->SetBackgroundColor(0.05, 0.05, 0.05);
+    tp->SetBackgroundOpacity(0.55);
+    tp->SetFrame(true);
+    tp->SetFrameColor(r, g, b);
+    tp->SetFrameWidth(1);
+    m_renderer->AddActor(an.text);
+}
+
+void SliceViewer::removeAnnoActors(Anno& an)
+{
+    m_renderer->RemoveActor(an.line);
+    m_renderer->RemoveActor(an.handles);
+    m_renderer->RemoveActor(an.handlesInner);
+    m_renderer->RemoveActor(an.text);
+}
+
+void SliceViewer::setAnnoVisible(Anno& an, bool on)
+{
+    an.line->SetVisibility(on ? 1 : 0);
+    an.handles->SetVisibility(on ? 1 : 0);
+    an.handlesInner->SetVisibility(on ? 1 : 0);
+    an.text->SetVisibility(on ? 1 : 0);
+}
+
+void SliceViewer::beginAnno(int kind)
+{
+    Anno an;
+    an.kind  = kind;
+    an.slice = m_slice;
+    // Distance/angle amber, ROI green — Weasis defaults.
+    if (kind == 1)
+        addAnnoActors(an, 0.18, 0.80, 0.44);
+    else
+        addAnnoActors(an, 1.0, 0.85, 0.1);
+    m_annos.push_back(an);
+    m_draftAnno = int(m_annos.size()) - 1;
+}
+
 void SliceViewer::updateMeasureActors(const std::array<double,3>& a,
                                       const std::array<double,3>& b)
 {
-    const double dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
-    const double mm = std::sqrt(dx * dx + dy * dy + dz * dz);
-
-    const int axis = axisOf(m_orientation);
-    const double plane = slicePlaneOffset();
-    auto pa = a, pb = b;
-    pa[axis] = pb[axis] = plane; // draw on the slice plane
-    setLine(m_measureLine, pa, pb);
-    m_measureLine->SetVisibility(1);
-    m_annoSlice = m_slice;
-    m_annoMeasure = true;
-    m_measA = a;
-    m_measB = b;
-    m_lastAnno = LastAnno::Measure;
+    if (m_draftAnno < 0 || m_draftAnno >= int(m_annos.size()))
+        return;
+    auto& an = m_annos[size_t(m_draftAnno)];
+    an.p[0] = a;
+    an.p[1] = b;
+    an.npts = 2;
+    rebuildAnno(an);
+    m_renderWindow->Render();
     emit annotationsChanged();
 
-    // Anchor the label in world space — immune to viewport/projection
-    // drift that misplaced 2D display-positioned text in full-screen.
-    double lp[3] = {(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, plane};
-    const int u = (axis + 1) % 3, v = (axis + 2) % 3;
-    lp[u] += 4.0;
-    lp[v] += 4.0;
-    m_measureText->SetPosition(lp);
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%.1f mm", mm);
-    m_measureText->SetInput(buf);
-    m_measureText->SetVisibility(1);
-    m_renderWindow->Render();
-    emit measured(mm);
+    const double dx = a[0]-b[0], dy = a[1]-b[1], dz = a[2]-b[2];
+    emit measured(std::sqrt(dx*dx + dy*dy + dz*dz));
 }
 
 void SliceViewer::updateRoiActors(const std::array<double,3>& a,
                                   const std::array<double,3>& b)
 {
-    if (!m_volume)
+    if (m_draftAnno < 0 || m_draftAnno >= int(m_annos.size()))
         return;
-    const int   axis = axisOf(m_orientation);
-    const auto  sp   = m_volume->spacing();
-    const auto  ext  = m_volume->extent();
-    const int   u    = (axis + 1) % 3, v = (axis + 2) % 3;
-    const double plane = slicePlaneOffset();
-
-    // Rectangle corners in world space on the slice plane.
-    double lo[3], hi[3];
-    for (int i = 0; i < 3; ++i) {
-        lo[i] = std::min(a[i], b[i]);
-        hi[i] = std::max(a[i], b[i]);
-    }
-    const double p[5][3] = {
-        {lo[0], lo[1], lo[2]}, {hi[0], lo[1], lo[2]},
-        {hi[0], hi[1], hi[2]}, {lo[0], hi[1], hi[2]},
-        {lo[0], lo[1], lo[2]}};
-    for (int i = 0; i < 5; ++i) {
-        double q[3] = {p[i][0], p[i][1], p[i][2]};
-        q[axis] = plane;
-        m_roiPts->SetPoint(i, q);
-    }
-    m_roiPts->Modified();
-    m_roiRect->SetVisibility(1);
-    m_annoSlice = m_slice;
-    m_annoRoi = true;
-    m_roiA = a;
-    m_roiB = b;
-    m_lastAnno = LastAnno::Roi;
-    emit annotationsChanged();
-
-    // Voxel stats inside the rectangle on this slice.
-    std::array<double,3> ai, bi;
-    m_volume->worldToIjk(a, ai);
-    m_volume->worldToIjk(b, bi);
-    const int iMin = std::clamp(int(std::floor(std::min(ai[u], bi[u]))),
-                                0, ext[u] - 1);
-    const int iMax = std::clamp(int(std::ceil(std::max(ai[u], bi[u]))),
-                                0, ext[u] - 1);
-    const int jMin = std::clamp(int(std::floor(std::min(ai[v], bi[v]))),
-                                0, ext[v] - 1);
-    const int jMax = std::clamp(int(std::ceil(std::max(ai[v], bi[v]))),
-                                0, ext[v] - 1);
-    const int k = std::clamp(int(std::lround(plane / sp[axis])),
-                             0, ext[axis] - 1);
-
-    double sum = 0, sum2 = 0, vmin = 1e30, vmax = -1e30;
-    long   n = 0;
-    int    idx[3];
-    idx[axis] = k;
-    for (int j = jMin; j <= jMax; ++j) {
-        idx[v] = j;
-        for (int i = iMin; i <= iMax; ++i) {
-            idx[u] = i;
-            const double s = m_volume->vtkImage()->GetScalarComponentAsDouble(
-                idx[0], idx[1], idx[2], 0);
-            sum += s;
-            sum2 += s * s;
-            vmin = std::min(vmin, s);
-            vmax = std::max(vmax, s);
-            ++n;
-        }
-    }
-    if (n < 2) {
-        m_roiText->SetVisibility(0);
-        m_renderWindow->Render();
-        return;
-    }
-    const double mean = sum / n;
-    const double sd   = std::sqrt(std::max(0.0, sum2 / n - mean * mean));
-    const double area = n * sp[u] * sp[v];
-
-    char buf[160];
-    std::snprintf(buf, sizeof(buf),
-                  "ROI: %.0f +/- %.0f HU\n[%.0f .. %.0f]  %ld px  %.1f mm2",
-                  mean, sd, vmin, vmax, n, area);
-    m_roiText->SetInput(buf);
-    {
-        double lp[3] = {hi[0], hi[1], plane};
-        lp[u] += 4.0;
-        lp[v] += 4.0;
-        m_roiText->SetPosition(lp);
-    }
-    m_roiText->SetVisibility(1);
+    auto& an = m_annos[size_t(m_draftAnno)];
+    an.p[0] = a;
+    an.p[1] = b;
+    an.npts = 2;
+    rebuildAnno(an);
     m_renderWindow->Render();
+    emit annotationsChanged();
 }
 
 void SliceViewer::updateAngleActors(const std::array<double,3>& a,
                                     const std::array<double,3>& b,
                                     const std::array<double,3>& c)
 {
+    if (m_draftAnno < 0 || m_draftAnno >= int(m_annos.size()))
+        return;
+    auto& an = m_annos[size_t(m_draftAnno)];
+    an.p[0] = a;
+    an.p[1] = b;
+    an.p[2] = c;
+    // Distinct-point count → how many clicks have landed so far.
+    auto eq = [](const std::array<double,3>& p,
+                 const std::array<double,3>& q) {
+        const double dx = p[0]-q[0], dy = p[1]-q[1], dz = p[2]-q[2];
+        return std::sqrt(dx*dx + dy*dy + dz*dz) < 1e-6;
+    };
+    an.npts = eq(a, b) && eq(b, c) ? 1 : (eq(b, c) ? 2 : 3);
+    rebuildAnno(an);
+    m_renderWindow->Render();
+    emit annotationsChanged();
+}
+
+void SliceViewer::rebuildAnno(Anno& an)
+{
     const int    axis  = axisOf(m_orientation);
     const double plane = slicePlaneOffset();
-    auto pa = a, pb = b, pc = c;
-    pa[axis] = pb[axis] = pc[axis] = plane;
+    const int    u = (axis + 1) % 3, v = (axis + 2) % 3;
 
-    auto dist = [](const std::array<double,3>& p,
-                   const std::array<double,3>& q) {
-        const double dx = p[0]-q[0], dy = p[1]-q[1], dz = p[2]-q[2];
-        return std::sqrt(dx*dx + dy*dy + dz*dz);
+    auto* pd  = vtkPolyData::SafeDownCast(an.line->GetMapper()->GetInput());
+    auto* hpd = vtkPolyData::SafeDownCast(
+        an.handles->GetMapper()->GetInput());
+    vtkPoints*   pts    = pd->GetPoints();
+    vtkCellArray* cells = pd->GetLines();
+    vtkPoints*   hpts   = hpd->GetPoints();
+    vtkCellArray* hcells = hpd->GetVerts();
+    pts->Reset();   cells->Reset();
+    hpts->Reset();  hcells->Reset();
+
+    auto onPlane = [&](std::array<double,3> p) {
+        p[axis] = plane;
+        return p;
     };
-    m_annoSlice = m_slice;
-    m_annoAngle = true;
-    m_angA = a;
-    m_angB = b;
-    m_angC = c;
-    m_lastAnno = LastAnno::Angle;
-    emit annotationsChanged();
+    auto polyline = [&](const std::vector<std::array<double,3>>& lp) {
+        cells->InsertNextCell(vtkIdType(lp.size()));
+        for (const auto& p : lp)
+            cells->InsertCellPoint(pts->InsertNextPoint(p.data()));
+    };
+    auto handle = [&](const std::array<double,3>& p) {
+        const vtkIdType id = hpts->InsertNextPoint(p.data());
+        hcells->InsertNextCell(1, &id);
+    };
 
-    // State detection by how many distinct points were clicked:
-    //   a==b==c → 1 point (show marker line at A)
-    //   b==c   → 2 points (show arm B→A only)
-    //   else   → 3 points (full angle)
-    if (dist(a, b) < 1e-6 && dist(b, c) < 1e-6) {
-        // Only point A — draw a tiny stub so the user sees the click.
-        auto stub = pa;
-        stub[(axis + 1) % 3] += 2.0; // 2mm tick along first in-plane axis
-        setLine(m_measureLine, pa, stub);
-        m_measureLine->SetVisibility(1);
-        m_measureLine2->SetVisibility(0);
-        m_measureText->SetVisibility(0);
-        m_renderWindow->Render();
+    // Weasis label spot: right of the shape bounds, vertically centred.
+    double lp[3] = {0, 0, plane};
+    std::string label;
+
+    if (an.kind == 0) {                      // distance line
+        const auto pa = onPlane(an.p[0]), pb = onPlane(an.p[1]);
+        polyline({pa, pb});
+        handle(pa);
+        handle(pb);
+        lp[u] = std::max(pa[u], pb[u]) + 4.0;
+        lp[v] = (pa[v] + pb[v]) / 2.0;
+        const double dx = an.p[0][0]-an.p[1][0],
+                     dy = an.p[0][1]-an.p[1][1],
+                     dz = an.p[0][2]-an.p[1][2];
+        const double mm = std::sqrt(dx*dx + dy*dy + dz*dz);
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%.1f %s", mm,
+                      (!m_volume || m_volume->spacingCalibrated())
+                          ? "mm" : "px");
+        label = buf;
+    } else if (an.kind == 1) {               // ROI rectangle
+        std::array<double,3> lo, hi;
+        for (int i = 0; i < 3; ++i) {
+            lo[i] = std::min(an.p[0][i], an.p[1][i]);
+            hi[i] = std::max(an.p[0][i], an.p[1][i]);
+        }
+        lo[axis] = hi[axis] = plane;
+        const std::array<double,3> c00 = lo,
+            c10{hi[0], lo[1], lo[2]}, c11 = hi,
+            c01{lo[0], hi[1], hi[2]};
+        polyline({c00, c10, c11, c01, c00});
+        handle(c00); handle(c10); handle(c11); handle(c01);
+        lp[u] = hi[u] + 4.0;
+        lp[v] = (lo[v] + hi[v]) / 2.0;
+
+        // Voxel stats inside the rect on this slice.
+        if (m_volume) {
+            const auto sp  = m_volume->spacing();
+            const auto ext = m_volume->extent();
+            std::array<double,3> ai, bi;
+            m_volume->worldToIjk(an.p[0], ai);
+            m_volume->worldToIjk(an.p[1], bi);
+            const int iMin = std::clamp(
+                int(std::floor(std::min(ai[u], bi[u]))), 0, ext[u] - 1);
+            const int iMax = std::clamp(
+                int(std::ceil(std::max(ai[u], bi[u]))), 0, ext[u] - 1);
+            const int jMin = std::clamp(
+                int(std::floor(std::min(ai[v], bi[v]))), 0, ext[v] - 1);
+            const int jMax = std::clamp(
+                int(std::ceil(std::max(ai[v], bi[v]))), 0, ext[v] - 1);
+            const int k = std::clamp(
+                int(std::lround(plane / sp[axis])), 0, ext[axis] - 1);
+            double sum = 0, sum2 = 0, vmin = 1e30, vmax = -1e30;
+            long   n = 0;
+            const auto& meta = m_volume->meta();
+            auto isPad = [&](double s) {
+                return meta.hasPixelPadding && s >= meta.padLo &&
+                       s <= meta.padHi;
+            };
+            int idx[3];
+            idx[axis] = k;
+            for (int j = jMin; j <= jMax; ++j) {
+                idx[v] = j;
+                for (int i = iMin; i <= iMax; ++i) {
+                    idx[u] = i;
+                    const double s = m_volume->vtkImage()
+                        ->GetScalarComponentAsDouble(idx[0], idx[1],
+                                                     idx[2], 0);
+                    if (isPad(s))
+                        continue;
+                    sum += s;  sum2 += s * s;
+                    vmin = std::min(vmin, s);
+                    vmax = std::max(vmax, s);
+                    ++n;
+                }
+            }
+            if (n >= 2) {
+                const double mean = sum / n;
+                const double sd = std::sqrt(
+                    std::max(0.0, sum2 / n - mean * mean));
+                const double area = n * sp[u] * sp[v];
+                char buf[192];
+                if (meta.suvFactor > 0.0) {
+                    std::snprintf(buf, sizeof(buf),
+                        "ROI: SUV %.2f +/- %.2f\n"
+                        "[max %.2f]  %ld px  %.1f mm2",
+                        mean * meta.suvFactor, sd * meta.suvFactor,
+                        vmax * meta.suvFactor, n, area);
+                } else {
+                    const char* unit =
+                        (meta.modality == "CT") ? " HU" : "";
+                    std::snprintf(buf, sizeof(buf),
+                        "ROI: %.0f +/- %.0f%s\n"
+                        "[%.0f .. %.0f]  %ld px  %.1f mm2",
+                        mean, sd, unit, vmin, vmax, n, area);
+                }
+                label = buf;
+            }
+        }
+    } else {                                 // angle  A — B — C
+        const auto pa = onPlane(an.p[0]), pb = onPlane(an.p[1]),
+                   pc = onPlane(an.p[2]);
+        if (an.npts == 1) {
+            auto stub = pa;
+            stub[u] += 2.0;
+            polyline({pa, stub});
+            handle(pa);
+        } else if (an.npts == 2) {
+            polyline({pa, pb});
+            handle(pa);
+            handle(pb);
+        } else {
+            polyline({pa, pb, pc});
+            handle(pa); handle(pb); handle(pc);
+            double v1[3], v2[3];
+            for (int i = 0; i < 3; ++i) {
+                v1[i] = an.p[0][i] - an.p[1][i];
+                v2[i] = an.p[2][i] - an.p[1][i];
+            }
+            const double n1 = std::sqrt(v1[0]*v1[0] + v1[1]*v1[1] +
+                                        v1[2]*v1[2]);
+            const double n2 = std::sqrt(v2[0]*v2[0] + v2[1]*v2[1] +
+                                        v2[2]*v2[2]);
+            if (n1 > 1e-6 && n2 > 1e-6) {
+                const double dot =
+                    (v1[0]*v2[0] + v1[1]*v2[1] + v1[2]*v2[2]) /
+                    (n1 * n2);
+                const double deg =
+                    std::acos(std::clamp(dot, -1.0, 1.0)) * 180.0 /
+                    M_PI;
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "%.1f\xc2\xb0", deg);
+                label = buf;
+            }
+            lp[u] = std::max({pa[u], pb[u], pc[u]}) + 4.0;
+            lp[v] = pb[v];
+        }
+    }
+
+    pts->Modified();
+    cells->Modified();
+    hpts->Modified();
+    hcells->Modified();
+    pd->Modified();
+    hpd->Modified();
+
+    an.text->SetInput(label.c_str());
+    an.text->SetPosition(lp);
+    const bool vis = (an.slice == m_slice);
+    setAnnoVisible(an, vis);
+    const bool measTool = (m_style->GetTool() == Tool::Measure ||
+                           m_style->GetTool() == Tool::Roi ||
+                           m_style->GetTool() == Tool::Angle);
+    an.handles->SetVisibility(vis && measTool ? 1 : 0);
+    an.handlesInner->SetVisibility(vis && measTool ? 1 : 0);
+    an.text->SetVisibility(vis && !label.empty() ? 1 : 0);
+
+    // Selection feedback (Weasis draws the selected shape heavier).
+    const bool sel = (m_editAnno >= 0 &&
+                      &an == &m_annos[size_t(m_editAnno)]);
+    an.line->GetProperty()->SetLineWidth(sel ? 3.2f : 2.0f);
+    an.handles->GetProperty()->SetPointSize(sel ? 11 : 9);
+    an.handlesInner->GetProperty()->SetPointSize(sel ? 6 : 4);
+}
+
+std::pair<int,int> SliceViewer::pickAnnoHandle(
+    const std::array<double,3>& worldPt) const
+{
+    if (!m_renderer)
+        return {-1, -1};
+    const int axis = axisOf(m_orientation);
+    const int u = (axis + 1) % 3, v = (axis + 2) % 3;
+
+    // Clicked point → display px.
+    m_renderer->SetWorldPoint(worldPt[0], worldPt[1], worldPt[2], 1.0);
+    m_renderer->WorldToDisplay();
+    double dc[3];
+    m_renderer->GetDisplayPoint(dc);
+
+    double best = 10.0;   // px pick radius
+    int bi = -1, bp = -1;
+    for (int i = 0; i < int(m_annos.size()); ++i) {
+        const Anno& an = m_annos[size_t(i)];
+        if (an.slice != m_slice || an.npts == 0)
+            continue;
+        // Handle positions in world space.
+        std::vector<std::array<double,3>> hs;
+        if (an.kind == 1) {              // ROI: 4 corners
+            std::array<double,3> lo, hi;
+            for (int c = 0; c < 3; ++c) {
+                lo[c] = std::min(an.p[0][c], an.p[1][c]);
+                hi[c] = std::max(an.p[0][c], an.p[1][c]);
+            }
+            hs = {lo, {hi[0], lo[1], lo[2]}, hi,
+                  {lo[0], hi[1], hi[2]}};
+        } else {
+            for (int p = 0; p < an.npts; ++p)
+                hs.push_back(an.p[size_t(p)]);
+        }
+        for (int p = 0; p < int(hs.size()); ++p) {
+            m_renderer->SetWorldPoint(hs[size_t(p)][0],
+                                      hs[size_t(p)][1],
+                                      hs[size_t(p)][2], 1.0);
+            m_renderer->WorldToDisplay();
+            double hp[3];
+            m_renderer->GetDisplayPoint(hp);
+            const double d = std::hypot(hp[0] - dc[0], hp[1] - dc[1]);
+            if (d < best) {
+                best = d;
+                bi = i;
+                bp = p;
+            }
+        }
+    }
+    return {bi, bp};
+}
+
+void SliceViewer::editAnnoPoint(int annoIdx, int ptIdx,
+                                const std::array<double,3>& worldPt)
+{
+    if (annoIdx < 0 || annoIdx >= int(m_annos.size()))
         return;
+    auto& an = m_annos[size_t(annoIdx)];
+    const int axis = axisOf(m_orientation);
+    const int u = (axis + 1) % 3, v = (axis + 2) % 3;
+
+    if (an.kind == 1) {
+        // Corner handles: 0=(au,av) 1=(bu,av) 2=(bu,bv) 3=(au,bv)
+        auto& a = an.p[0];
+        auto& b = an.p[1];
+        switch (ptIdx) {
+        case 0: a[u] = worldPt[u]; a[v] = worldPt[v]; break;
+        case 1: b[u] = worldPt[u]; a[v] = worldPt[v]; break;
+        case 2: b[u] = worldPt[u]; b[v] = worldPt[v]; break;
+        case 3: a[u] = worldPt[u]; b[v] = worldPt[v]; break;
+        default: break;
+        }
+    } else if (ptIdx >= 0 && ptIdx < 3) {
+        auto p = worldPt;
+        p[axis] = an.p[size_t(ptIdx)][axis];
+        an.p[size_t(ptIdx)] = p;
     }
-
-    // Always draw arm B→A once B is placed.
-    setLine(m_measureLine, pb, pa);
-    m_measureLine->SetVisibility(1);
-
-    if (dist(b, c) < 1e-6) {
-        // Only 2 points — no second arm yet, no angle text.
-        m_measureLine2->SetVisibility(0);
-        m_measureText->SetVisibility(0);
-        m_renderWindow->Render();
-        return;
-    }
-
-    // Full angle: both arms + degrees.
-    setLine(m_measureLine2, pb, pc);
-    m_measureLine2->SetVisibility(1);
-
-    double v1[3], v2[3];
-    for (int i = 0; i < 3; ++i) {
-        v1[i] = a[i] - b[i];
-        v2[i] = c[i] - b[i];
-    }
-    const double n1 = std::sqrt(v1[0]*v1[0] + v1[1]*v1[1] + v1[2]*v1[2]);
-    const double n2 = std::sqrt(v2[0]*v2[0] + v2[1]*v2[1] + v2[2]*v2[2]);
-    if (n1 < 1e-6 || n2 < 1e-6)
-        return;
-    const double dot = (v1[0]*v2[0] + v1[1]*v2[1] + v1[2]*v2[2]) / (n1 * n2);
-    const double deg = std::acos(std::clamp(dot, -1.0, 1.0)) * 180.0 / M_PI;
-
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%.1f\xc2\xb0", deg);
-    m_measureText->SetInput(buf);
-    {
-        double lp[3] = {pb[0], pb[1], pb[2]};
-        const int axis = axisOf(m_orientation);
-        lp[(axis + 1) % 3] += 4.0;
-        lp[(axis + 2) % 3] += 4.0;
-        m_measureText->SetPosition(lp);
-    }
-    m_measureText->SetVisibility(1);
+    rebuildAnno(an);
     m_renderWindow->Render();
-    emit measured(deg);
+    emit annotationsChanged();
 }
 
 void SliceViewer::setColorMap(int which)
@@ -1178,6 +1654,22 @@ void SliceViewer::setColorMap(int which)
     m_colorLut->SetNumberOfTableValues(256);
     m_colorLut->SetTableRange(0.0, 1.0); // input = windowed value
 
+    // Piecewise-linear ramp through RGB anchor points.
+    auto ramp = [this](std::initializer_list<std::array<double,3>> pts) {
+        const int n = int(pts.size());
+        for (int i = 0; i < 256; ++i) {
+            const double t = i / 255.0 * (n - 1);
+            const int k = std::min(int(t), n - 2);
+            const double f = t - k;
+            const auto& a = *(pts.begin() + k);
+            const auto& b = *(pts.begin() + k + 1);
+            m_colorLut->SetTableValue(i,
+                a[0] + (b[0] - a[0]) * f,
+                a[1] + (b[1] - a[1]) * f,
+                a[2] + (b[2] - a[2]) * f, 1.0);
+        }
+    };
+
     switch (which) {
     case 1: // inverted grayscale
         m_colorLut->SetHueRange(0, 0);
@@ -1185,14 +1677,7 @@ void SliceViewer::setColorMap(int which)
         m_colorLut->SetValueRange(1, 0);
         break;
     case 2: // hot iron (black -> red -> orange -> yellow -> white)
-        for (int i = 0; i < 256; ++i) {
-            const double t = i / 255.0;
-            double r, g, b;
-            if (t < 0.4)      { r = t / 0.4;             g = 0;                b = 0; }
-            else if (t < 0.7) { r = 1; g = (t - 0.4) / 0.3;                   b = 0; }
-            else              { r = 1; g = 1;             b = (t - 0.7) / 0.3; }
-            m_colorLut->SetTableValue(i, r, g, b, 1.0);
-        }
+        ramp({{0,0,0}, {1,0,0}, {1,1,0}, {1,1,1}});
         break;
     case 3: // PET-style rainbow
         m_colorLut->SetHueRange(0.6667, 0.0);
@@ -1200,13 +1685,41 @@ void SliceViewer::setColorMap(int which)
         m_colorLut->SetValueRange(1, 1);
         break;
     case 4: // bone-ish sepia
+        ramp({{0,0,0}, {0.38,0.34,0.30}, {0.79,0.74,0.68}, {1,1,0.96}});
+        break;
+    case 5: // Jet (MATLAB): dark blue -> cyan -> yellow -> dark red
+        ramp({{0,0,0.5}, {0,0,1}, {0,1,1}, {1,1,0}, {1,0,0}, {0.5,0,0}});
+        break;
+    case 6: // Cool (MATLAB): cyan -> magenta
+        ramp({{0,1,1}, {1,0,1}});
+        break;
+    case 7: // Copper: black -> copper
+        ramp({{0,0,0}, {0.8,0.50,0.20}, {1,0.78,0.50}});
+        break;
+    case 8: // Viridis (perceptually uniform): purple -> teal -> yellow
+        ramp({{0.267,0.005,0.329}, {0.283,0.141,0.458},
+              {0.231,0.322,0.545}, {0.127,0.566,0.550},
+              {0.369,0.789,0.382}, {0.993,0.906,0.144}});
+        break;
+    case 9: // Hot-metal blue (Siemens/GE PET): black -> blue -> red
+            // -> orange -> yellow -> white
+        ramp({{0,0,0}, {0,0,0.55}, {0.55,0,1}, {1,0,0.55},
+              {1,0.5,0.15}, {1,0.85,0.35}, {1,1,0.65}, {1,1,1}});
+        break;
+    case 10: // PET 20-step — discrete blue->red bands (GE consoles)
         for (int i = 0; i < 256; ++i) {
-            const double t = i / 255.0;
-            m_colorLut->SetTableValue(i,
-                std::min(1.0, t * 1.05),
-                std::min(1.0, t * 0.95 + 0.02 * t),
-                std::min(1.0, t * 0.82), 1.0);
+            const int band = std::min(int(i / 255.0 * 20), 19);
+            const double h = (1.0 - band / 19.0) * 0.6667;
+            const QColor c = QColor::fromHsvF(h, 1.0, 1.0);
+            m_colorLut->SetTableValue(i, c.redF(), c.greenF(),
+                                      c.blueF(), 1.0);
         }
+        break;
+    case 11: // Autumn (MATLAB): red -> yellow
+        ramp({{1,0,0}, {1,1,0}});
+        break;
+    case 12: // Winter (MATLAB): blue -> green
+        ramp({{0,0,1}, {0,1,0.5}});
         break;
     }
     m_colorLut->SetAlphaRange(1, 1);
@@ -1228,18 +1741,6 @@ QJsonArray ptToJson(const std::array<double,3>& p)
 std::array<double,3> ptFromJson(const QJsonArray& a)
 {
     return {a[0].toDouble(), a[1].toDouble(), a[2].toDouble()};
-}
-
-QJsonObject annoToJson(int slice, const std::array<double,3>& a,
-                       const std::array<double,3>& b,
-                       const std::array<double,3>& c)
-{
-    QJsonObject o;
-    o["slice"] = slice;
-    o["a"] = ptToJson(a);
-    o["b"] = ptToJson(b);
-    o["c"] = ptToJson(c);
-    return o;
 }
 
 } // namespace
@@ -1336,12 +1837,18 @@ void SliceViewer::paintAt(const std::array<double,3>& world, bool erase)
 QJsonObject SliceViewer::annotationsToJson() const
 {
     QJsonObject o;
-    if (m_annoMeasure)
-        o["measure"] = annoToJson(m_annoSlice, m_measA, m_measB, m_measB);
-    if (m_annoRoi)
-        o["roi"] = annoToJson(m_annoSlice, m_roiA, m_roiB, m_roiB);
-    if (m_annoAngle)
-        o["angle"] = annoToJson(m_annoSlice, m_angA, m_angB, m_angC);
+    QJsonArray  list;
+    for (const auto& an : m_annos) {
+        QJsonObject j;
+        j["kind"]  = an.kind;
+        j["slice"] = an.slice;
+        j["n"]     = an.npts;
+        j["a"] = ptToJson(an.p[0]);
+        j["b"] = ptToJson(an.p[1]);
+        j["c"] = ptToJson(an.p[2]);
+        list.append(j);
+    }
+    o["annos"] = list;
     return o;
 }
 
@@ -1349,38 +1856,63 @@ void SliceViewer::annotationsFromJson(const QJsonObject& o)
 {
     if (!m_volume || o.isEmpty())
         return;
-    auto read = [this](const QJsonObject& a, const char* key,
-                       std::array<double,3>* p) {
+    auto read = [](const QJsonObject& a, const char* key,
+                   std::array<double,3>* p) {
         const auto j = a.value(key).toArray();
         if (!j.isEmpty())
             *p = ptFromJson(j);
     };
+    auto addAnno = [&](int kind, int slice,
+                       const std::array<double,3>& a,
+                       const std::array<double,3>& b,
+                       const std::array<double,3>& c, int npts) {
+        beginAnno(kind);
+        auto& an = m_annos.back();
+        an.slice = slice;
+        an.p[0] = a;
+        an.p[1] = b;
+        an.p[2] = c;
+        an.npts = npts;
+        m_draftAnno = -1;        // restored shapes are final, not drafts
+        rebuildAnno(an);
+    };
+
+    // Current format: a list of shapes.
+    for (const auto& v : o.value("annos").toArray()) {
+        const auto j = v.toObject();
+        std::array<double,3> a{0,0,0}, b{0,0,0}, c{0,0,0};
+        read(j, "a", &a);
+        read(j, "b", &b);
+        read(j, "c", &c);
+        addAnno(j.value("kind").toInt(), j.value("slice").toInt(),
+                a, b, c, j.value("n").toInt(2));
+    }
+
+    // Legacy format: one shape per key.
     const QJsonObject m = o.value("measure").toObject();
     if (!m.isEmpty()) {
-        m_annoSlice = m.value("slice").toInt();
-        read(m, "a", &m_measA);
-        read(m, "b", &m_measB);
-        m_annoMeasure = true;
-        updateMeasureActors(m_measA, m_measB);
+        std::array<double,3> a{0,0,0}, b{0,0,0};
+        read(m, "a", &a);
+        read(m, "b", &b);
+        addAnno(0, m.value("slice").toInt(), a, b, b, 2);
     }
     const QJsonObject r = o.value("roi").toObject();
     if (!r.isEmpty()) {
-        m_annoSlice = r.value("slice").toInt();
-        read(r, "a", &m_roiA);
-        read(r, "b", &m_roiB);
-        m_annoRoi = true;
-        updateRoiActors(m_roiA, m_roiB);
+        std::array<double,3> a{0,0,0}, b{0,0,0};
+        read(r, "a", &a);
+        read(r, "b", &b);
+        addAnno(1, r.value("slice").toInt(), a, b, b, 2);
     }
     const QJsonObject g = o.value("angle").toObject();
     if (!g.isEmpty()) {
-        m_annoSlice = g.value("slice").toInt();
-        read(g, "a", &m_angA);
-        read(g, "b", &m_angB);
-        read(g, "c", &m_angC);
-        m_annoAngle = true;
-        updateAngleActors(m_angA, m_angB, m_angC);
+        std::array<double,3> a{0,0,0}, b{0,0,0}, c{0,0,0};
+        read(g, "a", &a);
+        read(g, "b", &b);
+        read(g, "c", &c);
+        addAnno(2, g.value("slice").toInt(), a, b, c, 3);
     }
     updateAnnotationVisibility();
+    m_renderWindow->Render();
 }
 
 } // namespace meda

@@ -13,6 +13,7 @@
 #include <vtkSmartPointer.h>
 #include <vtkWindowToImageFilter.h>
 #include <vtkCamera.h>
+#include <vtkMatrix3x3.h>
 #include <vtkAutoInit.h>
 VTK_MODULE_INIT(vtkRenderingOpenGL2)
 VTK_MODULE_INIT(vtkRenderingFreeType)
@@ -46,9 +47,22 @@ int main(int argc, char** argv)
 
     auto ext = vol->extent();
     auto rng = vol->scalarRange();
+    auto sp0 = vol->spacing();
     std::printf("extent %dx%dx%d  range %.0f..%.0f  WW %.0f WL %.0f\n",
                 ext[0], ext[1], ext[2], rng[0], rng[1],
                 vol->meta().windowWidth, vol->meta().windowCenter);
+    std::printf("spacing %.3f x %.3f x %.3f mm%s\n",
+                sp0[0], sp0[1], sp0[2],
+                vol->spacingCalibrated() ? "" : "  (UNSCALED)");
+    {
+        const double* d = vol->vtkImage()->GetDirectionMatrix()->GetData();
+        std::printf("vtk dir: [%.3f %.3f %.3f; %.3f %.3f %.3f; %.3f %.3f %.3f]\n",
+                    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8]);
+        auto id = vol->itkImage()->GetDirection();
+        std::printf("itk dir: [%.3f %.3f %.3f; %.3f %.3f %.3f; %.3f %.3f %.3f]\n",
+                    id(0,0), id(0,1), id(0,2), id(1,0), id(1,1), id(1,2),
+                    id(2,0), id(2,1), id(2,2));
+    }
 
     // Flip regression: exercise DicomLoader::flipVolume on a live volume.
     {
@@ -66,19 +80,17 @@ int main(int argc, char** argv)
         if (std::abs(a - b) > 1e-3)
             std::fprintf(stderr, "FLIP MISMATCH\n");
     }
-    if (ext[0] != 128 || ext[2] != 48) {
-        std::fprintf(stderr, "unexpected extent\n");
-        return 2;
-    }
-    // Sphere centre should be ~1200 HU, corner air ~-1000.
+    // Sphere centre should be ~1200 HU, corner air ~-1000. These checks
+    // are specific to the synthetic CT — warn, don't abort, so the probe
+    // still renders real data (e.g. enhanced MR) for inspection.
     const double c = vol->vtkImage()->GetScalarComponentAsDouble(
         ext[0] / 2, ext[1] / 2, ext[2] / 2, 0);
     const double corner = vol->vtkImage()->GetScalarComponentAsDouble(0, 0, 0, 0);
     std::printf("centre %.0f  corner %.0f\n", c, corner);
-    if (c < 1000 || corner > -500) {
+    if (ext[0] != 128 || ext[2] != 48)
+        std::fprintf(stderr, "unexpected extent (non-CT input?)\n");
+    else if (c < 1000 || corner > -500)
         std::fprintf(stderr, "unexpected voxel values\n");
-        return 3;
-    }
 
     // Render the middle slice of each orientation to <outPng>_{ax,cor,sag}.png
     const int orientations[3] = {2, 1, 0}; // Z=axial, Y=coronal, X=sagittal
@@ -98,8 +110,17 @@ int main(int argc, char** argv)
         mapper->SetResampleToScreenPixels(1);
         auto actor = vtkSmartPointer<vtkImageSlice>::New();
         actor->SetMapper(mapper);
-        actor->GetProperty()->SetColorWindow(400);
-        actor->GetProperty()->SetColorLevel(40);
+        double ww = 400, wc = 40;
+        if (vol->meta().hasWindowing) {
+            ww = vol->meta().windowWidth;
+            wc = vol->meta().windowCenter;
+        } else {
+            auto ar = vol->autoWindowRange();
+            ww = std::max(1.0, ar[1] - ar[0]);
+            wc = (ar[0] + ar[1]) * 0.5;
+        }
+        actor->GetProperty()->SetColorWindow(ww);
+        actor->GetProperty()->SetColorLevel(wc);
 
         std::fflush(stdout);
         auto ren = vtkSmartPointer<vtkRenderer>::New();

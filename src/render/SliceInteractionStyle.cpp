@@ -12,6 +12,11 @@ namespace meda {
 void SliceInteractionStyle::OnMouseMove()
 {
     const int* pos = this->Interactor->GetEventPosition();
+    if (m_editing && pickPoint && onMeasureEdit) {
+        onMeasureEdit(pickPoint(pos[0], pos[1]));
+        vtkInteractorStyleImage::OnMouseMove();
+        return;
+    }
     if (m_measuring && pickPoint) {
         auto p = pickPoint(pos[0], pos[1]);
         if (m_tool == Tool::Roi) {
@@ -97,16 +102,31 @@ void SliceInteractionStyle::OnLeftButtonDown()
         break;
     case Tool::Measure:
         if (pickPoint) {
-            m_measureStart = pickPoint(pos[0], pos[1]);
+            const auto p = pickPoint(pos[0], pos[1]);
+            // Grab an existing handle → edit it, don't start a new line.
+            if (onMeasureGrab && onMeasureGrab(p)) {
+                m_editing = true;
+                break;
+            }
+            m_measureStart = p;
             m_measuring = true;
+            if (onMeasureStart)
+                onMeasureStart(0);
             if (onMeasured)
                 onMeasured(m_measureStart, m_measureStart);
         }
         break;
     case Tool::Roi:
         if (pickPoint) {
-            m_measureStart = pickPoint(pos[0], pos[1]);
+            const auto p = pickPoint(pos[0], pos[1]);
+            if (onMeasureGrab && onMeasureGrab(p)) {
+                m_editing = true;
+                break;
+            }
+            m_measureStart = p;
             m_measuring = true;
+            if (onMeasureStart)
+                onMeasureStart(1);
             if (onRoi)
                 onRoi(m_measureStart, m_measureStart);
         }
@@ -114,6 +134,12 @@ void SliceInteractionStyle::OnLeftButtonDown()
     case Tool::Angle:
         if (pickPoint && onAngle) {
             auto p = pickPoint(pos[0], pos[1]);
+            if (onMeasureGrab && onMeasureGrab(p)) {
+                m_editing = true;
+                break;
+            }
+            if (m_anglePts.empty() && onMeasureStart)
+                onMeasureStart(2);
             m_anglePts.push_back(p);
             if (m_anglePts.size() == 1) {
                 onAngle(p, p, p); // point A only — show marker
@@ -141,6 +167,7 @@ void SliceInteractionStyle::OnLeftButtonDown()
 
 void SliceInteractionStyle::OnLeftButtonUp()
 {
+    m_editing = false;
     if (m_tool == Tool::WindowLevel) {
         if (m_windowLevelling) {
             m_windowLevelling = false;

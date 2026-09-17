@@ -32,6 +32,13 @@ public:
     std::function<void()>                             onWindowLevelStarted;
     std::function<void(int, int)>                     onWindowLevelDelta;
     std::function<void(std::array<double,3>)>         onPointPicked;
+    /// New annotation starting (kind 0=distance 1=roi 2=angle).
+    std::function<void(int)>                          onMeasureStart;
+    /// Returns true when the press landed on an existing annotation's
+    /// handle — the drag then edits that point instead of drawing.
+    std::function<bool(std::array<double,3>)>         onMeasureGrab;
+    /// Dragging an existing annotation's handle point.
+    std::function<void(std::array<double,3>)>         onMeasureEdit;
     std::function<void(std::array<double,3>, std::array<double,3>)> onMeasured;
     std::function<void(std::array<double,3>, std::array<double,3>)> onRoi;
     std::function<void(std::array<double,3>, std::array<double,3>,
@@ -62,6 +69,7 @@ public:
 private:
     Tool m_tool = Tool::WindowLevel;
     bool m_measuring = false;
+    bool m_editing = false;   // dragging an existing anno handle
     bool m_painting = false;
     bool m_windowLevelling = false;
     int  m_wlStartPos[2] = {0, 0};

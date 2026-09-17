@@ -92,12 +92,19 @@ ConfigDock::ConfigDock(QWidget* parent)
     m_memBudget->setSuffix(" GB");
     m_cineFps = new QSpinBox(view);
     m_cineFps->setRange(2, 60);
+    m_openIn = new QComboBox(view);
+    m_openIn->addItems({tr("Single view (acquired plane)"),
+                        tr("MPR (3 views + 3D)")});
     m_showPlanes = new QCheckBox(tr("Show MPR cursor planes in 3D"), view);
     m_showPlanes->setStyleSheet("color: #DCE2E9; font-size: 11px;");
+    m_showScale = new QCheckBox(tr("Show scale ruler (mm)"), view);
+    m_showScale->setStyleSheet("color: #DCE2E9; font-size: 11px;");
     form3->addRow(tr("Slice sort"), m_sliceSort);
+    form3->addRow(tr("Open series in"), m_openIn);
     form3->addRow(tr("Memory budget"), m_memBudget);
     form3->addRow(tr("Cine FPS"), m_cineFps);
     form3->addRow(QString(), m_showPlanes);
+    form3->addRow(QString(), m_showScale);
     vl->addLayout(form3);
 
     root->addWidget(recv);
@@ -133,11 +140,14 @@ void ConfigDock::reload()
     m_port->setValue(s.value("scp/port", 11112).toInt());
     m_webUrl->setText(s.value("dicomweb/url").toString());
     m_sliceSort->setCurrentIndex(s.value("viewer/sliceSort", 0).toInt());
+    m_openIn->setCurrentIndex(s.value("viewer/openIn", 0).toInt());
     m_memBudget->setValue(
         s.value("viewer/memBudgetGB", 4.0).toDouble());
     m_cineFps->setValue(s.value("viewer/cineFps", 15).toInt());
     m_showPlanes->setChecked(
         s.value("viewer/showPlanes", true).toBool());
+    m_showScale->setChecked(
+        s.value("viewer/showScale", true).toBool());
 }
 
 void ConfigDock::applyAll()
@@ -147,9 +157,11 @@ void ConfigDock::applyAll()
     s.setValue("scp/port", m_port->value());
     s.setValue("dicomweb/url", m_webUrl->text().trimmed());
     s.setValue("viewer/sliceSort", m_sliceSort->currentIndex());
+    s.setValue("viewer/openIn", m_openIn->currentIndex());
     s.setValue("viewer/memBudgetGB", m_memBudget->value());
     s.setValue("viewer/cineFps", m_cineFps->value());
     s.setValue("viewer/showPlanes", m_showPlanes->isChecked());
+    s.setValue("viewer/showScale", m_showScale->isChecked());
     emit receiverChanged(m_aet->text().trimmed(), m_port->value());
     emit memoryBudgetChanged(
         static_cast<qint64>(m_memBudget->value() * (1 << 30)));

@@ -1,6 +1,9 @@
 #include "DicomLoader.h"
 
 #include <itkGDCMImageIO.h>
+
+#include <dcmtk/dcmdata/dctk.h>
+#include <dcmtk/dcmdata/dcfilefo.h>
 #include <itkGDCMSeriesFileNames.h>
 #include <itkImageFileReader.h>
 #include <itkImageSeriesReader.h>
@@ -66,6 +69,71 @@ std::string getFirstUid(const itk::MetaDataDictionary& dict,
     return v;
 }
 
+/// In-plane pixel spacing in mm. DICOM spacing tags store "row\column"
+/// (y first, x second). Returns false when no usable tag exists.
+/// `prefer` is the primary tag; fallbacks cover projection images —
+/// dental panos (PX/DX) and CR often carry only Imager Pixel Spacing
+/// (0018,1164), intraoral/scanned images only Nominal Scanned Pixel
+/// Spacing (0018,2010) — while JPEG-wrapped secondary captures carry
+/// none and stay unscaled.
+bool readPixelSpacing(const itk::MetaDataDictionary& dict,
+                      double& sx, double& sy)
+{
+    for (const char* key : {"0028|0030", "0018|1164", "0018|2010"}) {
+        const std::string v = getTagString(dict, key);
+        if (v.empty())
+            continue;
+        const auto sep = v.find('\\');
+        try {
+            sy = std::stod(v.substr(0, sep));
+            sx = std::stod(sep == std::string::npos
+                               ? v : v.substr(sep + 1));
+        } catch (...) {
+            continue;
+        }
+        if (sx > 0 && sy > 0)
+            return true;
+    }
+    return false;
+}
+
+/// Enhanced/multiframe objects keep VOI parameters inside functional
+/// group sequences, not top-level tags: SharedFunctionalGroupsSequence
+/// (5200,9229) — or per-frame (5200,9230) — item → FrameVOILUTSequence
+/// (0028,9132) → WindowCenter/Width. Walk them so enhanced MR/CT get
+/// their intended window instead of a generic auto-fit.
+bool voiWindowFromFunctionalGroups(const std::string& path,
+                                   double& wc, double& ww)
+{
+    DcmFileFormat ff;
+    if (ff.loadFile(path.c_str()).bad())
+        return false;
+    DcmDataset* ds = ff.getDataset();
+    if (!ds)
+        return false;
+
+    auto voiWindow = [](DcmItem* seqItem, double& c, double& w) {
+        if (!seqItem)
+            return false;
+        DcmItem* voi = nullptr;
+        if (seqItem->findAndGetSequenceItem(DCM_FrameVOILUTSequence,
+                                            voi).bad() || !voi)
+            return false;
+        return voi->findAndGetFloat64(DCM_WindowCenter, c).good() &&
+               voi->findAndGetFloat64(DCM_WindowWidth, w).good();
+    };
+
+    DcmItem* item = nullptr;
+    if (ds->findAndGetSequenceItem(DCM_SharedFunctionalGroupsSequence,
+                                   item).good() &&
+        voiWindow(item, wc, ww))
+        return true;
+    item = nullptr;
+    return ds->findAndGetSequenceItem(
+               DCM_PerFrameFunctionalGroupsSequence, item).good() &&
+           voiWindow(item, wc, ww);
+}
+
 /// Z position of a slice, read from the file header only. NaN on failure.
 double slicePosition(const std::string& path)
 {
@@ -85,6 +153,135 @@ double slicePosition(const std::string& path)
     } catch (...) {
         return std::numeric_limits<double>::quiet_NaN();
     }
+}
+
+/// Parse "YYYYMMDDHHMMSS[.ffffff]" (or a DA+TM concatenation) into
+/// seconds. Only differences matter, so a fixed epoch is fine.
+double dicomDateTimeSec(const std::string& dt)
+{
+    if (dt.size() < 14)
+        return -1;
+    auto num = [&dt](int off, int len) {
+        int v = 0;
+        for (int i = 0; i < len && off + i < int(dt.size()); ++i) {
+            const char c = dt[size_t(off + i)];
+            if (c < '0' || c > '9')
+                break;
+            v = v * 10 + (c - '0');
+        }
+        return v;
+    };
+    static const int doy[] = {0, 31, 59, 90, 120, 151, 181,
+                              212, 243, 273, 304, 334};
+    const int mo = std::clamp(num(4, 2), 1, 12);
+    const double days = num(0, 4) * 365.25 + doy[mo - 1] + num(6, 2);
+    return days * 86400.0 + num(8, 2) * 3600.0 + num(10, 2) * 60.0 +
+           num(12, 2);
+}
+
+/// QIBA SUVbw factor for a PT file — same rules as Weasis/Orthanc:
+/// rescaled pixel value × factor = SUVbw in g/mL. Returns 0 when the
+/// required tags are missing or unsupported (not an error — the series
+/// just stays in raw units).
+double computeSuvFactor(const std::string& path)
+{
+    DcmFileFormat ff;
+    if (ff.loadFile(path.c_str()).bad())
+        return 0.0;
+    DcmDataset* ds = ff.getDataset();
+    if (!ds)
+        return 0.0;
+
+    // CorrectedImage (0028,0051) must include attenuation and decay
+    // correction — otherwise SUVbw is meaningless.
+    OFString ci;
+    if (ds->findAndGetOFString(DCM_CorrectedImage, ci).bad())
+        return 0.0;
+    const std::string corr = ci.c_str();
+    if (corr.find("ATTN") == std::string::npos ||
+        corr.find("DECY") == std::string::npos)
+        return 0.0;
+
+    OFString units;
+    if (ds->findAndGetOFString(DCM_Units, units).bad())
+        return 0.0;
+
+    if (units == "GML")        // already grams/millilitre == SUVbw
+        return 1.0;
+
+    if (units == "CNTS") {     // Philips stores the factor privately
+        OFString creator;
+        if (ds->findAndGetOFString(DcmTagKey(0x7053, 0x0010), creator)
+                .good() &&
+            creator == "Philips PET Private Group") {
+            double f = 0.0;
+            if (ds->findAndGetFloat64(DcmTagKey(0x7053, 0x1000), f)
+                    .good() && f != 0.0)
+                return f;
+        }
+        return 0.0;
+    }
+
+    if (units != "BQML")
+        return 0.0;
+
+    double weightKg = 0.0;
+    if (ds->findAndGetFloat64(DCM_PatientWeight, weightKg).bad() ||
+        weightKg <= 0.0)
+        return 0.0;
+
+    DcmSequenceOfItems* rph = nullptr;
+    if (ds->findAndGetSequence(
+            DCM_RadiopharmaceuticalInformationSequence, rph).bad() ||
+        !rph || rph->card() == 0)
+        return 0.0;
+    DcmItem* item = rph->getItem(0);
+
+    double totalDose = 0.0, halfLife = 0.0;
+    if (item->findAndGetFloat64(DCM_RadionuclideTotalDose, totalDose)
+            .bad() ||
+        item->findAndGetFloat64(DCM_RadionuclideHalfLife, halfLife)
+            .bad() || totalDose <= 0.0 || halfLife <= 0.0)
+        return 0.0;
+
+    OFString decy;
+    if (ds->findAndGetOFString(DCM_DecayCorrection, decy).bad() ||
+        decy != "START")
+        return 0.0;
+
+    // Scan time: SeriesDate + SeriesTime.
+    OFString sdate, stime;
+    ds->findAndGetOFString(DCM_SeriesDate, sdate);
+    ds->findAndGetOFString(DCM_SeriesTime, stime);
+    const double scanSec =
+        dicomDateTimeSec(std::string(sdate.c_str()) +
+                         std::string(stime.c_str()));
+
+    // Injection time: full datetime when present, else the time-only
+    // StartTime dated with the scan day.
+    OFString injDT, injT;
+    double injSec = -1;
+    if (item->findAndGetOFString(DCM_RadiopharmaceuticalStartDateTime,
+                                 injDT).good())
+        injSec = dicomDateTimeSec(injDT.c_str());
+    if (injSec < 0 &&
+        item->findAndGetOFString(DCM_RadiopharmaceuticalStartTime, injT)
+            .good() && sdate.length() > 0)
+        injSec = dicomDateTimeSec(std::string(sdate.c_str()) +
+                                  std::string(injT.c_str()));
+    if (scanSec < 0 || injSec < 0)
+        return 0.0;
+    double uptakeSec = scanSec - injSec;
+    if (uptakeSec <= 0.0)
+        uptakeSec += 86400.0;    // cross-midnight injection
+    if (uptakeSec <= 0.0)
+        return 0.0;
+
+    const double correctedDose =
+        totalDose * std::pow(2.0, -uptakeSec / halfLife);
+    if (correctedDose <= 0.0)
+        return 0.0;
+    return weightKg * 1000.0 / correctedDose;   // weight kg -> g
 }
 
 /// Split a series that packs multiple acquisitions under one
@@ -272,12 +469,49 @@ SeriesMeta DicomLoader::readSeriesHeader(const std::string& firstFile,
     std::string wc = getTagString(dict, "0028|1050");
     std::string ww = getTagString(dict, "0028|1051");
     if (!wc.empty() && !ww.empty()) {
-        m.windowCenter  = std::stod(wc.substr(0, wc.find('\\')));
-        m.windowWidth   = std::stod(ww.substr(0, ww.find('\\')));
-        m.hasWindowing  = true;
+        try {
+            m.windowCenter = std::stod(wc.substr(0, wc.find('\\')));
+            m.windowWidth  = std::stod(ww.substr(0, ww.find('\\')));
+            m.hasWindowing = true;
+        } catch (...) {}
     }
+    // Enhanced/multiframe objects keep VOI params in functional groups.
+    // Gate on NumberOfFrames so normal series pay no extra file read.
+    if (!m.hasWindowing &&
+        !getTagString(dict, "0028|0008").empty()) {
+        if (voiWindowFromFunctionalGroups(firstFile,
+                                          m.windowCenter, m.windowWidth))
+            m.hasWindowing = true;
+    }
+
+    // Pixel padding sentinel, converted to rescaled (output) units so it
+    // compares directly against loaded voxel values.
+    try {
+        const std::string ri = getTagString(dict, "0028|1052");
+        const std::string rs = getTagString(dict, "0028|1053");
+        const double slope = rs.empty() ? 1.0 : std::stod(rs);
+        const double intercept = ri.empty() ? 0.0 : std::stod(ri);
+        const std::string pad = getTagString(dict, "0028|0120");
+        if (!pad.empty()) {
+            const double p = std::stod(pad) * slope + intercept;
+            const std::string lim = getTagString(dict, "0028|0121");
+            if (!lim.empty()) {
+                const double l = std::stod(lim) * slope + intercept;
+                m.padLo = std::min(p, l);
+                m.padHi = std::max(p, l);
+            } else {
+                m.padLo = m.padHi = p;
+            }
+            m.hasPixelPadding = true;
+        }
+    } catch (...) {}
+
     const auto photometric = getTagString(dict, "0028|0004");
     m.monochrome1 = (photometric == "MONOCHROME1");
+
+    // PT: SUVbw factor — rescaled value × factor = g/mL uptake.
+    if (m.modality == "PT")
+        m.suvFactor = computeSuvFactor(firstFile);
     return m;
 }
 
@@ -405,6 +639,30 @@ VolumePtr DicomLoader::loadFiles(const std::vector<std::string>& files,
     }
     } // !image — normal series path
 
+    // PixelSpacing (0028,0030) is absent on many DX/CR/MG/dental exports —
+    // the physical spacing lives in ImagerPixelSpacing (0018,1164).
+    // GDCM reports 1.0 when missing; prefer the Imager value when it exists.
+    {
+        const auto sp = image->GetSpacing();
+        if (sp[0] <= 0.0 || sp[0] >= 0.99) {
+            auto io = itk::GDCMImageIO::New();
+            io->SetFileName(use.front());
+            try {
+                io->ReadImageInformation();
+                const auto ips = getTagString(
+                    io->GetMetaDataDictionary(), "0018|1164");
+                if (!ips.empty()) {
+                    const auto bs = ips.find('\\');
+                    ImageType::SpacingType fixed = sp;
+                    fixed[0] = std::stod(ips.substr(0, bs));
+                    if (bs != std::string::npos)
+                        fixed[1] = std::stod(ips.substr(bs + 1));
+                    image->SetSpacing(fixed);
+                }
+            } catch (...) {}
+        }
+    }
+
     // Reorient every volume to canonical axial (identity direction). This
     // makes index space == patient space up to origin, which keeps MPR,
     // crosshair and measurement math trivially correct.
@@ -419,6 +677,36 @@ VolumePtr DicomLoader::loadFiles(const std::vector<std::string>& files,
     image = orienter->GetOutput();
     image->DisconnectPipeline();
 
+    // When the file has no Pixel Spacing tag and ITK fell back to a
+    // placeholder 1 mm/px, measurements would report pixels as mm.
+    // Recover real spacing from the projection-image tags; if none
+    // exist, flag the volume unscaled so the UI labels distances in
+    // pixels. Non-placeholder spacing without the tag means GDCM
+    // sourced it from functional-group sequences (enhanced MR/CT).
+    bool calibrated = true;
+    {
+        auto sio = itk::GDCMImageIO::New();
+        sio->SetFileName(use.front());
+        try {
+            sio->ReadImageInformation();
+        } catch (...) {}
+        const auto& dict = sio->GetMetaDataDictionary();
+        const auto cur = image->GetSpacing();
+        const bool placeholder =
+            std::abs(cur[0] - 1.0) < 1e-3 && std::abs(cur[1] - 1.0) < 1e-3;
+        if (getTagString(dict, "0028|0030").empty() && placeholder) {
+            double sx = 0, sy = 0;
+            if (readPixelSpacing(dict, sx, sy)) {
+                auto sp = image->GetSpacing();
+                sp[0] = sx;
+                sp[1] = sy;
+                image->SetSpacing(sp);
+            } else {
+                calibrated = false;
+            }
+        }
+    }
+
     // Header metadata for the volume (defaults may differ from scan-time).
     SeriesMeta meta = readSeriesHeader(use.front(), "", use);
 
@@ -431,8 +719,17 @@ VolumePtr DicomLoader::loadFiles(const std::vector<std::string>& files,
     vtkImage->SetSpacing(image->GetSpacing()[0], image->GetSpacing()[1],
                          image->GetSpacing()[2]);
     vtkImage->SetOrigin(0, 0, 0); // patient position handled via ITK geometry
+    // Display the stored raster, not patient space: OrientImageFilter
+    // only permutes/flips, so near-axial acquisitions keep a small
+    // residual rotation in the direction matrix. Left on the vtk image,
+    // the reslice mapper draws the quad rotated — tilted image with
+    // black corners. Weasis shows the raster as stored; so do we. The
+    // ITK image keeps the true direction for fusion/registration math.
+    vtkImage->SetDirectionMatrix(1, 0, 0, 0, 1, 0, 0, 0, 1);
 
-    return std::make_shared<Volume>(image, vtkImage, std::move(meta));
+    auto vol = std::make_shared<Volume>(image, vtkImage, std::move(meta));
+    vol->setSpacingCalibrated(calibrated);
+    return vol;
 }
 
 VolumePtr DicomLoader::loadSeriesStreaming(const SeriesMeta& series,
@@ -442,6 +739,12 @@ VolumePtr DicomLoader::loadSeriesStreaming(const SeriesMeta& series,
     if (files.empty())
         return nullptr;
 
+    // A single file may be multi-frame (enhanced MR/CT, US cine): it
+    // unpacks to a 3D volume, which this file-per-slice path would
+    // collapse to one frame. There's nothing to stream anyway.
+    if (files.size() == 1)
+        return loadSeries(series);
+
     // --- Header pass: geometry, direction, z order (headers only) ------
     // Parallel: a 577-file series went from ~4s serial to ~0.5s on
     // 8 cores. Each file's header is read once — z position comes from
@@ -449,6 +752,8 @@ VolumePtr DicomLoader::loadSeriesStreaming(const SeriesMeta& series,
     const int nFiles = static_cast<int>(files.size());
     std::vector<double> zs(nFiles, std::numeric_limits<double>::quiet_NaN());
     std::vector<char>   hdrOk(nFiles, 0);
+    std::vector<char>   hdrCal(nFiles, 1);
+    std::vector<int>    hdrFrames(nFiles, 1);
     std::vector<int>    hdrCols(nFiles), hdrRows(nFiles);
     std::vector<double> hdrSx(nFiles),   hdrSy(nFiles);
     std::vector<std::string> hdrDir(nFiles);
@@ -464,8 +769,29 @@ VolumePtr DicomLoader::loadSeriesStreaming(const SeriesMeta& series,
         const auto& d = io->GetMetaDataDictionary();
         hdrCols[i] = int(io->GetDimensions(0));
         hdrRows[i] = int(io->GetDimensions(1));
+        // A file packing >1 frame (enhanced/multiframe) breaks the
+        // file-per-slice accounting — bail to the normal loader.
+        hdrFrames[i] = io->GetNumberOfDimensions() >= 3
+                           ? int(io->GetDimensions(2)) : 1;
         hdrSx[i]   = io->GetSpacing(0);
         hdrSy[i]   = io->GetSpacing(1);
+        // PixelSpacing (0028,0030) is absent on many DX/CR/MG/dental
+        // exports — physical spacing then lives in ImagerPixelSpacing
+        // (0018,1164) or NominalScannedPixelSpacing (0018,2010), and
+        // GDCM reports a placeholder 1.0. Only treat 1.0 as a placeholder:
+        // enhanced objects carry spacing in functional-group sequences,
+        // which GDCM reads without surfacing the tag.
+        if (getTagString(d, "0028|0030").empty() &&
+            std::abs(hdrSx[i] - 1.0) < 1e-3 &&
+            std::abs(hdrSy[i] - 1.0) < 1e-3) {
+            double fx = 0, fy = 0;
+            if (readPixelSpacing(d, fx, fy)) {
+                hdrSx[i] = fx;
+                hdrSy[i] = fy;
+            } else {
+                hdrCal[i] = 0;
+            }
+        }
         hdrDir[i]  = getTagString(d, "0020|0037");
         auto ipp = getTagString(d, "0020|0032");
         const auto lastSep = ipp.rfind('\\');
@@ -498,8 +824,9 @@ VolumePtr DicomLoader::loadSeriesStreaming(const SeriesMeta& series,
     double sx = 1, sy = 1;
     bool identityDir = true;
     for (int i = 0; i < nFiles; ++i) {
-        if (!hdrOk[i])
-            return loadSeries(series);   // unreadable → normal path
+        if (!hdrOk[i] || hdrFrames[i] > 1)
+            return loadSeries(series);   // unreadable or multiframe →
+                                         // normal path
     }
     cols = hdrCols[0];
     rows = hdrRows[0];
@@ -623,6 +950,8 @@ VolumePtr DicomLoader::loadSeriesStreaming(const SeriesMeta& series,
         // Full header meta from the first file — the library DB meta
         // only carries a subset (patient/date/Se# were blank on the HUD).
         readSeriesHeader(files.front(), series.seriesInstanceUID, files));
+    vol->setSpacingCalibrated(std::all_of(
+        hdrCal.begin(), hdrCal.end(), [](char c) { return c != 0; }));
     if (downsampled) {
         vol->setDownsampled(true);
         vol->setFullExtent({cols, rows, nSlices});
@@ -746,6 +1075,7 @@ vtkSmartPointer<vtkImageData> DicomLoader::resampleOntoGrid(
     const auto sp = grid->spacing();
     out->SetSpacing(sp[0], sp[1], sp[2]);
     out->SetOrigin(0, 0, 0);   // index space == display space
+    out->SetDirectionMatrix(1, 0, 0, 0, 1, 0, 0, 0, 1);
     return out;
 }
 

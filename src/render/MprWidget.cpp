@@ -212,6 +212,18 @@ void MprWidget::setWindowLevel(double w, double c)
         v->setWindowLevel(w, c);
 }
 
+void MprWidget::setScaleVisible(bool on)
+{
+    for (auto* v : m_views)
+        v->setScaleVisible(on);
+}
+
+void MprWidget::setFusionBadge(const QString& name)
+{
+    for (auto* v : m_views)
+        v->setFusionBadge(name);
+}
+
 void MprWidget::setCineFps(int fps)
 {
     for (auto* v : m_views)
@@ -240,6 +252,18 @@ void MprWidget::setInfoText(const QString& text)
 {
     for (auto* v : m_views)
         v->setInfoText(text);
+}
+
+void MprWidget::setStudyText(const QString& text)
+{
+    for (auto* v : m_views)
+        v->setStudyText(text);
+}
+
+void MprWidget::setSeriesText(const QString& text)
+{
+    for (auto* v : m_views)
+        v->setSeriesText(text);
 }
 
 void MprWidget::toggleDetach(int idx)

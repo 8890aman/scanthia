@@ -83,6 +83,7 @@
 #include <QtConcurrent/QtConcurrent>
 
 #include <vtkImageData.h>
+#include <vtkImageGaussianSmooth.h>
 #include <vtkLookupTable.h>
 #include <vtkPointData.h>
 
@@ -361,6 +362,17 @@ QIcon toolIcon(const QString& name)
     return ico;
 }
 
+/// The plane a series was acquired in — the axis with the fewest
+/// slices (the stack direction). Ties/isotropic volumes → axial.
+Orientation acquiredOrientation(const std::array<int,3>& e)
+{
+    if (e[0] < e[1] && e[0] < e[2])
+        return Orientation::Sagittal;
+    if (e[1] < e[0] && e[1] < e[2])
+        return Orientation::Coronal;
+    return Orientation::Axial;
+}
+
 } // namespace
 
 MainWindow::MainWindow()
@@ -478,11 +490,15 @@ MainWindow::MainWindow()
     // first opening the PACS dialog. Config + queue live in a dock.
     buildReceiverDock();
     buildConfigDock();
-    // Restore persisted viewer prefs (slice sort, cine fps).
+    // Restore persisted viewer prefs (slice sort, cine fps, ruler).
     {
         QSettings s;
         m_sliceSort = s.value("viewer/sliceSort", 0).toInt();
         m_cineFps   = s.value("viewer/cineFps", 15).toInt();
+        const bool showScale =
+            s.value("viewer/showScale", true).toBool();
+        m_mpr->setScaleVisible(showScale);
+        m_singleView->setScaleVisible(showScale);
     }
     startStoreScp();
 }
@@ -1113,10 +1129,8 @@ void MainWindow::buildMenus()
         [this](bool on) { popOutCompare(on); });
     m_popoutAction->setCheckable(true);
     view->addSeparator();
-    auto* presets = view->addMenu(tr("Window Presets"));
-    for (const auto& p : kWindowPresets)
-        presets->addAction(p.name, this,
-                           [this, p] { applyPreset(p); });
+    m_presetMenu = view->addMenu(tr("Window Presets"));
+    rebuildPresetsMenu();
     view->addSeparator();
     auto* volPresets = view->addMenu(tr("3D Presets"));
     for (const char* p : {"CT-Soft", "CT-Bone", "CT-Lung", "MIP"})
@@ -1201,8 +1215,11 @@ void MainWindow::buildMenus()
     auto* lutMenu = view->addMenu(tr("Color Map"));
     auto* lutGroup = new QActionGroup(this);
     const char* luts[] = {"Grayscale", "Inverted Gray", "Hot Iron",
-                          "Rainbow (PET)", "Bone"};
-    for (int i = 0; i < 5; ++i) {
+                          "Rainbow (PET)", "Bone",
+                          "Jet", "Cool", "Copper", "Viridis",
+                          "Hot Metal Blue", "PET 20-Step",
+                          "Autumn", "Winter"};
+    for (int i = 0; i < int(std::size(luts)); ++i) {
         auto* a = lutMenu->addAction(tr(luts[i]), this, [this, i] {
             m_mpr->setColorMap(i);
             m_singleView->setColorMap(i);
@@ -1250,7 +1267,8 @@ void MainWindow::buildMenus()
         a->setChecked(pct == 50.0);
         fusGroup->addAction(a);
     }
-    view->addAction(tr("Clear Fusion"), this, [this] { clearFusion(); });
+    view->addAction(tr("Clear Fusion (Ctrl+U)"), QKeySequence("Ctrl+U"),
+                    this, [this] { clearFusion(); });
 
     // Oblique MPR — rotate the active MPR pane's plane off-axis.
     view->addSeparator();
@@ -1588,7 +1606,11 @@ void MainWindow::openFiles()
             QMetaObject::invokeMethod(this, [this, vol] {
                 m_volume = vol;
                 m_mpr->setVolume(vol);
-                m_singleView->setVolume(vol, Orientation::Axial);
+                m_singleView->setVolume(vol,
+                    acquiredOrientation(vol->extent()));
+                if (QSettings().value("viewer/openIn", 0).toInt() == 0)
+                    m_stack->setCurrentIndex(0);
+                rebuildPresetsMenu();
                 m_progress->setVisible(false);
             }, Qt::QueuedConnection);
         } catch (const std::exception& e) {
@@ -1757,6 +1779,38 @@ void MainWindow::buildConfigDock()
     m_configDockWidget->setWidget(m_configDock);
     m_configDockWidget->setAllowedAreas(Qt::LeftDockWidgetArea |
                                         Qt::RightDockWidgetArea);
+
+    // Custom title bar — the stock dock close button is nearly
+    // invisible on the dark theme.
+    {
+        auto* tbar = new QWidget(m_configDockWidget);
+        auto* tbl = new QHBoxLayout(tbar);
+        tbl->setContentsMargins(8, 4, 4, 4);
+        tbl->setSpacing(6);
+        auto* ttl = new QLabel(tr("CONFIGURATION"), tbar);
+        ttl->setStyleSheet(
+            "color: #8E99A6; font-size: 10px; font-weight: 600;"
+            "letter-spacing: 0.8px;");
+        auto* closeBtn = new QToolButton(tbar);
+        closeBtn->setText(QString::fromUtf8("\xE2\x9C\x95")); // ✕
+        closeBtn->setFixedSize(28, 28);
+        closeBtn->setToolTip(tr("Close"));
+        closeBtn->setCursor(Qt::PointingHandCursor);
+        closeBtn->setStyleSheet(
+            "QToolButton { color: #8E99A6; background: #1A1E24;"
+            "  border: 1px solid #2E3540; border-radius: 4px;"
+            "  font-size: 12px; padding: 4px; }"
+            "QToolButton:hover { color: #E8ECF1; background: #3D4750;"
+            "  border-color: #4DA3E8; }"
+            "QToolButton:pressed { background: #2E3540; }");
+        connect(closeBtn, &QToolButton::clicked,
+                m_configDockWidget, &QWidget::hide);
+        tbl->addWidget(ttl);
+        tbl->addStretch();
+        tbl->addWidget(closeBtn);
+        m_configDockWidget->setTitleBarWidget(tbar);
+    }
+
     addDockWidget(Qt::RightDockWidgetArea, m_configDockWidget);
     m_configDockWidget->hide();
 
@@ -1775,6 +1829,10 @@ void MainWindow::buildConfigDock()
         if (m_mpr->volumeView())
             m_mpr->volumeView()->setShowPlanes(
                 s.value("viewer/showPlanes", true).toBool());
+        const bool showScale =
+            s.value("viewer/showScale", true).toBool();
+        m_mpr->setScaleVisible(showScale);
+        m_singleView->setScaleVisible(showScale);
     });
     // Memory budget → next load uses the new cap.
     connect(m_configDock, &ConfigDock::memoryBudgetChanged, this,
@@ -1939,7 +1997,13 @@ void MainWindow::loadSeries(const SeriesMeta& meta)
                     m_stack->setCurrentIndex(0);
                 } else {
                     m_mpr->setVolume(m_volume);
-                    m_singleView->setVolume(m_volume, Orientation::Axial);
+                    m_singleView->setVolume(m_volume,
+                                            acquiredOrientation(ext));
+                    // Orthanc-style: open on the acquired plane in
+                    // single view unless the user prefers MPR.
+                    if (QSettings().value("viewer/openIn", 0).toInt()
+                            == 0)
+                        m_stack->setCurrentIndex(0);
                 }
             }
             // New slice data in the shared buffer — repaint.
@@ -1978,8 +2042,11 @@ void MainWindow::loadSeries(const SeriesMeta& meta)
                 if (m_fusionImg) {
                     m_fusionImg = nullptr;
                     m_fusionLut = nullptr;
+                    m_fusionName.clear();
                     m_mpr->setFusion(nullptr, nullptr, 0);
                     m_singleView->setFusion(nullptr, nullptr, 0);
+                    m_mpr->setFusionBadge(QString());
+                    m_singleView->setFusionBadge(QString());
                 }
                 if (!alreadyAttached ||
                     m_volume->vtkImage() != vol->vtkImage()) {
@@ -1996,8 +2063,11 @@ void MainWindow::loadSeries(const SeriesMeta& meta)
                         m_stack->setCurrentIndex(0);
                     } else {
                         m_mpr->setVolume(m_volume);
-                        m_singleView->setVolume(m_volume,
-                                                Orientation::Axial);
+                        m_singleView->setVolume(
+                            m_volume, acquiredOrientation(ext));
+                        if (QSettings().value("viewer/openIn", 0)
+                                .toInt() == 0)
+                            m_stack->setCurrentIndex(0);
                     }
                 } else {
                     // Streamed and already attached — final repaint.
@@ -2011,27 +2081,54 @@ void MainWindow::loadSeries(const SeriesMeta& meta)
                 //   study date / accession / institution
                 //   modality  series #  series desc  dims
                 const auto ext3 = m_volume->extent();
+                // Weasis-style 4-corner split:
+                //   TL patient  ·  TR study+slice  ·  BL WW/WL  ·  BR series
                 QString hud = QString::fromStdString(m.patientName) + "\n";
                 hud += "ID: " + QString::fromStdString(m.patientID);
                 if (!m.patientBirthDate.empty())
                     hud += "   DOB: " + QString::fromStdString(m.patientBirthDate);
                 if (!m.patientSex.empty())
                     hud += "   " + QString::fromStdString(m.patientSex);
-                hud += "\n";
                 if (!m.studyDate.empty())
-                    hud += QString::fromStdString(m.studyDate);
-                if (!m.accessionNumber.empty())
-                    hud += "   Acc: " + QString::fromStdString(m.accessionNumber);
-                hud += "\n";
-                hud += QString::fromStdString(m.modality);
-                if (!m.seriesNumber.empty())
-                    hud += "  Se:" + QString::fromStdString(m.seriesNumber);
-                if (!m.seriesDescription.empty())
-                    hud += "  " + QString::fromStdString(m.seriesDescription);
-                hud += QString("  %1x%2x%3")
-                           .arg(ext3[0]).arg(ext3[1]).arg(ext3[2]);
+                    hud += "\n" + QString::fromStdString(m.studyDate);
                 m_singleView->setInfoText(hud);
                 m_mpr->setInfoText(hud);
+
+                QString study;
+                if (!m.institution.empty())
+                    study += QString::fromStdString(m.institution);
+                if (!m.studyDescription.empty()) {
+                    if (!study.isEmpty()) study += "\n";
+                    study += QString::fromStdString(m.studyDescription);
+                }
+                if (!m.accessionNumber.empty()) {
+                    if (!study.isEmpty()) study += "\n";
+                    study += "Acc: " +
+                             QString::fromStdString(m.accessionNumber);
+                }
+                m_singleView->setStudyText(study);
+                m_mpr->setStudyText(study);
+
+                // Thickness ≈ spacing along the stack (acquired) axis.
+                const auto sp3 = m_volume->spacing();
+                int stack = 0;
+                for (int i = 1; i < 3; ++i)
+                    if (ext3[i] < ext3[stack]) stack = i;
+                QString series = QString::fromStdString(m.modality);
+                if (!m.seriesNumber.empty())
+                    series += "  Se:" +
+                              QString::fromStdString(m.seriesNumber);
+                if (!m.seriesDescription.empty())
+                    series += "\n" +
+                              QString::fromStdString(m.seriesDescription);
+                series += QString("\n%1x%2x%3   Thick: %4 mm")
+                              .arg(ext3[0]).arg(ext3[1]).arg(ext3[2])
+                              .arg(sp3[stack], 0, 'f', 1);
+                if (m.suvFactor > 0.0)
+                    series += "   SUVbw";
+                m_singleView->setSeriesText(series);
+                m_mpr->setSeriesText(series);
+                rebuildPresetsMenu();   // scope CT presets to CT series
                 // "FLIPPED" badge on every pane when a flip is persisted.
                 const bool flipped = flipMaskFor(m_seriesUid) != 0;
                 m_singleView->setFlipBadge(flipped);
@@ -2096,15 +2193,54 @@ void MainWindow::setLayout(int which)
 
 void MainWindow::applyPreset(const WindowPreset& p)
 {
-    SliceViewer* v = m_stack->currentIndex() == 0
-        ? m_singleView : m_mpr->viewer(Orientation::Axial);
-    if (!m_volume || !v)
+    if (!m_volume)
         return;
-    if (p.width < 0) {
-        v->autoWindowLevel();
-    } else {
-        v->setWindowLevel(p.width, p.center);
+    // Apply to every pane — the preset describes the tissue window, not
+    // the view.
+    for (SliceViewer* v : {m_singleView,
+                           m_mpr->viewer(Orientation::Axial),
+                           m_mpr->viewer(Orientation::Coronal),
+                           m_mpr->viewer(Orientation::Sagittal)}) {
+        if (!v)
+            continue;
+        switch (p.mode) {
+        case 1:  // auto 1–99%
+            v->autoWindowLevel();
+            break;
+        case 2:  // stored VOI window, else fall back to auto
+            if (m_volume->meta().hasWindowing)
+                v->setWindowLevel(m_volume->meta().windowWidth,
+                                  m_volume->meta().windowCenter);
+            else
+                v->autoWindowLevel();
+            break;
+        case 3: { // full scalar range
+            const auto r = m_volume->scalarRange();
+            v->setWindowLevel(r[1] - r[0], (r[0] + r[1]) / 2.0);
+            break;
+        }
+        default:
+            v->setWindowLevel(p.width, p.center);
+        }
     }
+}
+
+void MainWindow::rebuildPresetsMenu()
+{
+    if (!m_presetMenu)
+        return;
+    m_presetMenu->clear();
+    const QString mod = m_volume
+        ? QString::fromStdString(m_volume->meta().modality) : "";
+    for (const auto& p : kWindowPresets) {
+        // Weasis scopes presets per modality — Hounsfield windows are
+        // meaningless on MR/PX signal values.
+        if (*p.modality && mod != p.modality)
+            continue;
+        m_presetMenu->addAction(p.name, this,
+                                [this, p] { applyPreset(p); });
+    }
+    m_presetMenu->setEnabled(m_volume != nullptr);
 }
 
 void MainWindow::setTool(Tool t)
@@ -2656,8 +2792,10 @@ void MainWindow::applyHangingProtocol()
         m_mpr->setColorMap(3);
         m_singleView->setColorMap(3);
     }
-    // Anatomy-based window presets (skip if DICOM already carries WL).
-    if (m.hasWindowing)
+    // Anatomy-based window presets are Hounsfield windows — meaningful
+    // only for CT. For MR/PT/etc. autoWindowLevel already fit the data
+    // range; a CT preset on MR signal values saturates the image.
+    if (m.hasWindowing || m.modality != "CT")
         return;
     auto preset = [this](double w, double c) {
         m_mpr->setWindowLevel(w, c);
@@ -2699,10 +2837,18 @@ void MainWindow::applyCustomShortcuts()
 
 void MainWindow::updateHover(std::array<double,3> ijk, double value)
 {
-    m_statusLabel->setText(
-        QString("[%1, %2, %3]  %4")
-            .arg(int(ijk[0])).arg(int(ijk[1])).arg(int(ijk[2]))
-            .arg(value, 0, 'f', 1));
+    const double suv = m_volume ? m_volume->meta().suvFactor : 0.0;
+    if (suv > 0.0) {
+        m_statusLabel->setText(
+            QString("[%1, %2, %3]  SUVbw %4")
+                .arg(int(ijk[0])).arg(int(ijk[1])).arg(int(ijk[2]))
+                .arg(value * suv, 0, 'f', 2));
+    } else {
+        m_statusLabel->setText(
+            QString("[%1, %2, %3]  %4")
+                .arg(int(ijk[0])).arg(int(ijk[1])).arg(int(ijk[2]))
+                .arg(value, 0, 'f', 1));
+    }
 }
 
 void MainWindow::debugOpen(const QString& dir)
@@ -2930,6 +3076,19 @@ void MainWindow::fuseSeries(const QString& uid)
             auto img = DicomLoader::resampleOntoGrid(fused, m_volume);
             if (gen != m_loadGen.load())
                 return;
+            // Mild blur on the overlay — smooths the blocky edges of the
+            // resampled low-res modality without softening the anatomy
+            // underneath (the base volume is untouched).
+            {
+                auto smooth = vtkSmartPointer<vtkImageGaussianSmooth>::New();
+                smooth->SetInputData(img);
+                smooth->SetStandardDeviations(1.2, 1.2, 1.2);
+                smooth->SetRadiusFactors(4.0, 4.0, 4.0);
+                smooth->Update();
+                auto blurred = vtkSmartPointer<vtkImageData>::New();
+                blurred->DeepCopy(smooth->GetOutput());
+                img = blurred;
+            }
             QMetaObject::invokeMethod(this, [this, img, name] {
                 if (!m_volume)
                     return;
@@ -2948,8 +3107,19 @@ void MainWindow::fuseSeries(const QString& uid)
                 lut->Build();
                 m_fusionImg = img;
                 m_fusionLut = lut;
+                m_fusionName = name;
                 m_mpr->setFusion(img, lut, 0.5);
                 m_singleView->setFusion(img, lut, 0.5);
+                // Persistent badge so it's always clear which series is
+                // overlaid on which — with the clear shortcut next to it.
+                const QString base =
+                    QString::fromStdString(
+                        m_volume->meta().seriesDescription);
+                // Compact 2-line badge, top-centre of each pane.
+                const QString badge =
+                    tr("%1 on %2\nCtrl+U to clear").arg(name, base);
+                m_mpr->setFusionBadge(badge);
+                m_singleView->setFusionBadge(badge);
                 m_statusLabel->setText(tr("Fused: %1").arg(name));
             }, Qt::QueuedConnection);
         } catch (const std::exception& e) {
@@ -2966,8 +3136,11 @@ void MainWindow::clearFusion()
 {
     m_fusionImg = nullptr;
     m_fusionLut = nullptr;
+    m_fusionName.clear();
     m_mpr->setFusion(nullptr, nullptr, 0);
     m_singleView->setFusion(nullptr, nullptr, 0);
+    m_mpr->setFusionBadge(QString());
+    m_singleView->setFusionBadge(QString());
     m_statusLabel->setText(tr("Fusion cleared"));
 }
 

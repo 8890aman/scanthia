@@ -14,12 +14,18 @@
 #include <vtkPlane.h>
 #include <vtkCornerAnnotation.h>
 #include <vtkActor.h>
+#include <vtkActor2D.h>
+#include <vtkPolyData.h>
+#include <vtkPoints.h>
+#include <vtkPolyDataMapper2D.h>
 #include <vtkTextActor.h>
 #include <vtkBillboardTextActor3D.h>
 #include <vtkLookupTable.h>
 #include <vtkGenericOpenGLRenderWindow.h>
 
 #include <array>
+#include <utility>
+#include <vector>
 
 class vtkDistanceWidget;
 
@@ -78,10 +84,20 @@ public:
 
     /// Overlay text for the top-left corner (patient / series info).
     void setInfoText(const QString& text);
+    /// Study-level text, upper-right corner above the slice line.
+    void setStudyText(const QString& text);
+    /// Series-level text, lower-right corner (modality/desc/dims).
+    void setSeriesText(const QString& text);
     /// Show/hide the amber "FLIPPED" badge at bottom-left.
     void setFlipBadge(bool on);
     /// Show/hide the amber "DOWNSAMPLED" badge at bottom-left.
     void setDownsampleBadge(bool on);
+    /// Fusion indicator: orange "FUSION: <series>" badge, bottom-right.
+    /// Empty string hides it.
+    void setFusionBadge(const QString& name);
+    /// Show/hide the edge ruler (mm tick marks on left+bottom axes).
+    /// Always hidden for unscaled volumes regardless of `on`.
+    void setScaleVisible(bool on);
 
     /// World-space coordinate of the slice plane along the view normal.
     double slicePlaneOffset() const;
@@ -133,6 +149,7 @@ protected:
     void keyReleaseEvent(QKeyEvent* e) override;
     void zoomBy(double factor);   // scale camera by factor
     bool event(QEvent* e) override;  // touch gestures
+    void resizeEvent(QResizeEvent* e) override;
     /// Qt-level double click — more reliable than VTK's internal
     /// generic-interactor double-click timing, which can miss clicks
     /// when the custom interactor style is mid-drag (W/L, pan, etc).
@@ -162,6 +179,11 @@ private:
     void setupCamera();
     void updateCrosshairActors();
     void updateCornerText();
+    /// Weasis-style ruler: fixed "nice" length bars (1-2-5 cm/mm)
+    /// centred on the bottom and left edges, in display pixels.
+    void updateScaleRuler();
+    /// Start a new annotation (kind 0=distance 1=roi 2=angle).
+    void beginAnno(int kind);
     void updateMeasureActors(const std::array<double,3>& a,
                              const std::array<double,3>& b);
     void updateRoiActors(const std::array<double,3>& a,
@@ -170,6 +192,18 @@ private:
                            const std::array<double,3>& b,
                            const std::array<double,3>& c);
     void updateAnnotationVisibility();
+    /// Rebuild an annotation's line/handle/label geometry + text.
+    struct Anno;
+    void rebuildAnno(Anno& an);
+    void addAnnoActors(Anno& an, double r, double g, double b);
+    void removeAnnoActors(Anno& an);
+    void setAnnoVisible(Anno& an, bool on);
+    /// Nearest annotation handle to a world point, in display px.
+    /// Returns {annoIndex, pointIndex} or {-1,-1}.
+    std::pair<int,int> pickAnnoHandle(
+        const std::array<double,3>& worldPt) const;
+    void editAnnoPoint(int annoIdx, int ptIdx,
+                       const std::array<double,3>& worldPt);
 
     VolumePtr      m_volume;
     Orientation    m_orientation = Orientation::Axial;
@@ -177,17 +211,25 @@ private:
     double         m_obliqueYaw   = 0.0;
     int            m_slice = 0;
     bool           m_showCrosshair = false;
-    std::array<double,3> m_crosshairIjk{0, 0, 0};
-    int            m_annoSlice = -1;   // slice the annotations live on
-    bool           m_annoMeasure = false;
-    bool           m_annoRoi = false;
-    bool           m_annoAngle = false;
-    // Stored annotation geometry (world-space points) for persistence.
-    std::array<double,3> m_measA{0,0,0}, m_measB{0,0,0};
-    std::array<double,3> m_roiA{0,0,0},   m_roiB{0,0,0};
-    std::array<double,3> m_angA{0,0,0}, m_angB{0,0,0}, m_angC{0,0,0};
-    enum class LastAnno { None, Measure, Roi, Angle };
-    LastAnno m_lastAnno = LastAnno::None;
+    QString        m_studyText;   // prepended to the TR slice line
+    std::array<double,3> m_crosshairIjk{0,0,0};
+
+    // Weasis-style graphics list: each annotation is a line polyline,
+    // square handle glyphs at its control points, and a world-space
+    // label. Multiple annotations per slice; handles are draggable.
+    struct Anno {
+        int kind = 0;      // 0=distance 1=roi 2=angle
+        int slice = -1;
+        int npts = 0;      // points placed so far (drafts may be partial)
+        std::array<std::array<double,3>,3> p{};
+        vtkSmartPointer<vtkActor>                 line;
+        vtkSmartPointer<vtkActor>                 handles;      // color ring
+        vtkSmartPointer<vtkActor>                 handlesInner; // bright core
+        vtkSmartPointer<vtkBillboardTextActor3D>  text;
+    };
+    std::vector<Anno> m_annos;
+    int m_draftAnno = -1;                 // index being drawn now
+    int m_editAnno  = -1, m_editPt = -1;  // handle being dragged
 
     vtkSmartPointer<vtkImageData> m_labelmap;   // overlay being edited
     int    m_editLabel = 1;
@@ -214,6 +256,7 @@ private:
     int    m_slabType = 0;
     double m_slabMm   = 0.0;
     bool   m_smoothing = false;
+    bool   m_scaleVisible = true;
 
     // Animated slice position (world mm) — scroll targets m_slice, the
     // rendered plane eases toward it through interpolated positions.
@@ -221,15 +264,18 @@ private:
     QTimer m_scrollAnim;
     vtkSmartPointer<vtkActor>               m_crossLineH;
     vtkSmartPointer<vtkActor>               m_crossLineV;
-    vtkSmartPointer<vtkActor>               m_measureLine;
-    vtkSmartPointer<vtkActor>               m_measureLine2;
-    vtkSmartPointer<vtkBillboardTextActor3D>  m_measureText;
-    vtkSmartPointer<vtkActor>               m_roiRect;
-    vtkSmartPointer<vtkPoints>              m_roiPts;
-    vtkSmartPointer<vtkBillboardTextActor3D>  m_roiText;
     vtkSmartPointer<vtkCornerAnnotation>    m_corner;
+    // Scale ruler: polydata drawn in display px (dark outline pass +
+    // white pass), plus a label per axis.
+    vtkSmartPointer<vtkPolyData>            m_rulerPd;
+    vtkSmartPointer<vtkPoints>              m_rulerPts;
+    vtkSmartPointer<vtkActor2D>             m_rulerDark;
+    vtkSmartPointer<vtkActor2D>             m_rulerLight;
+    vtkSmartPointer<vtkTextActor>           m_rulerLabelH;
+    vtkSmartPointer<vtkTextActor>           m_rulerLabelV;
     vtkSmartPointer<vtkTextActor>           m_flipBadge;
     vtkSmartPointer<vtkTextActor>           m_downsampleBadge;
+    vtkSmartPointer<vtkTextActor>           m_fusionBadge;
     vtkSmartPointer<vtkTextActor>           m_dirLabel[4]; // L,R,top,bottom
     vtkSmartPointer<SliceInteractionStyle>  m_style;
     vtkSmartPointer<vtkLookupTable>         m_overlayLut;

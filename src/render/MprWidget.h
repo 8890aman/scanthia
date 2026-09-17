@@ -49,6 +49,8 @@ public:
     /// Fused modality (PET on CT) shown through a hot LUT + alpha ramp.
     void setFusion(vtkImageData* img, vtkLookupTable* lut, double opacity);
     void setFusionOpacity(double o);
+    /// "FUSION: <series>" badge on all slice views; empty hides it.
+    void setFusionBadge(const QString& name);
     /// Oblique MPR: rotate the active view's plane. (0,0) resets.
     void setObliqueAngles(double pitchDeg, double yawDeg);
     /// Reset all views to orthogonal MPR.
@@ -61,11 +63,15 @@ public:
     void setViewsLinked(bool on) { m_linkEnabled = on; }
     /// Window/level applied to all slice views.
     void setWindowLevel(double w, double c);
+    /// Show/hide the mm edge ruler on all slice views.
+    void setScaleVisible(bool on);
     /// Segmentation editing parameters on all slice views.
     void setEditLabel(int label);
     void setBrushRadiusMm(double mm);
     /// Top-left info text on all slice views.
     void setInfoText(const QString& text);
+    void setStudyText(const QString& text);
+    void setSeriesText(const QString& text);
     /// Detach/reattach a pane (0-2 = axial/sagittal/coronal, 3 = 3D)
     /// into a floating top-level window for a second monitor.
     void toggleDetach(int idx);

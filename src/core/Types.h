@@ -48,25 +48,41 @@ struct SeriesMeta {
     double      windowWidth  = 400.0;
     bool        hasWindowing = false;
     bool        monochrome1  = false;
+    // Pixel padding (0028,0120 PixelPaddingValue + 0028,0121
+    // PixelPaddingRangeLimit), converted to rescaled units. Voxels in
+    // [padLo, padHi] are padding — excluded from auto-window/ROI stats.
+    bool        hasPixelPadding = false;
+    double      padLo = 0.0;
+    double      padHi = 0.0;
+    /// PT: multiply a rescaled pixel value by this to get SUVbw (g/mL).
+    /// 0 = not computable (missing dose/weight/decay-correction tags).
+    double      suvFactor = 0.0;
     std::vector<std::string> files;
 };
 
-/// Window/level preset for soft-tissue imaging.
+/// Window/level preset. Modality-scoped like Weasis's presets.xml —
+/// Hounsfield windows only make sense for CT.
 struct WindowPreset {
     const char* name;
     double      width;
     double      center;
+    const char* modality;   // "" = any modality
+    int         mode = 0;   // 0=fixed w/c  1=auto 1–99%  2=DICOM stored
+                            // 3=full range
 };
 
+// Fixed values from Weasis's stock presets.xml (weasis-distributions),
+// plus the modality-agnostic entries every viewer shows.
 inline constexpr WindowPreset kWindowPresets[] = {
-    {"Soft Tissue",  400.0,   50.0},
-    {"Lung",        1500.0, -600.0},
-    {"Bone",        2000.0,  300.0},
-    {"Brain",         80.0,   40.0},
-    {"Mediastinum",  350.0,   50.0},
-    {"Abdomen",      400.0,   50.0},
-    {"Liver",        150.0,   30.0},
-    {"Full Range",    -1.0,    0.0},
+    {"Brain",         110.0,   35.0, "CT"},
+    {"Abdomen",       320.0,   50.0, "CT"},
+    {"Mediastinum",   400.0,   80.0, "CT"},
+    {"Bone",         2000.0,  350.0, "CT"},
+    {"Lung",         1500.0, -500.0, "CT"},
+    {"MIP",           380.0,  120.0, "CT"},
+    {"DICOM Default",   0.0,    0.0, "", 2},   // VOI WW/WL from the file
+    {"Auto Level",      0.0,    0.0, "", 1},   // 1–99% percentile fit
+    {"Full Range",      0.0,    0.0, "", 3},
 };
 
 } // namespace meda

@@ -6,6 +6,10 @@
 #include <vtkImageMathematics.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <vector>
 
 namespace meda {
 
@@ -30,6 +34,69 @@ std::array<double, 2> Volume::scalarRange() const
 {
     const double* r = m_vtk->GetScalarRange();
     return {r[0], r[1]};
+}
+
+std::array<double, 2> Volume::autoWindowRange() const
+{
+    if (m_autoRange[0] >= 0.0)
+        return m_autoRange;
+
+    const auto* buf = m_itk->GetBufferPointer();
+    const size_t nVox =
+        m_itk->GetLargestPossibleRegion().GetNumberOfPixels();
+    if (!buf || !nVox)
+        return {0.0, 1.0};
+
+    const bool hasPad = m_meta.hasPixelPadding;
+    auto isPad = [&](double v) {
+        return hasPad && v >= m_meta.padLo && v <= m_meta.padHi;
+    };
+    // Stride-sample big volumes — a few million voxels is plenty for a
+    // histogram and keeps this off the load path.
+    const size_t stride = std::max<size_t>(1, nVox / 4000000);
+
+    // Pass 1: range excluding padding / non-finite voxels.
+    double lo = std::numeric_limits<double>::max(), hi = -lo;
+    size_t n = 0;
+    for (size_t i = 0; i < nVox; i += stride) {
+        const double v = buf[i];
+        if (isPad(v) || !std::isfinite(v))
+            continue;
+        lo = std::min(lo, v);
+        hi = std::max(hi, v);
+        ++n;
+    }
+    if (!n || hi <= lo)
+        return m_autoRange = {lo < hi ? lo : 0.0, hi > lo ? hi : 1.0};
+
+    // Pass 2: 2048-bin histogram, take 0.5% / 99.5% percentiles — trims
+    // single hot voxels and air/padding residue that min/max keep.
+    constexpr int BINS = 2048;
+    std::vector<uint64_t> hist(BINS, 0);
+    const double inv = (BINS - 1) / (hi - lo);
+    for (size_t i = 0; i < nVox; i += stride) {
+        const double v = buf[i];
+        if (isPad(v) || !std::isfinite(v))
+            continue;
+        hist[int((v - lo) * inv)]++;
+    }
+    const uint64_t tail = uint64_t(n * 0.005);
+    uint64_t acc = 0;
+    int bLo = 0, bHi = BINS - 1;
+    for (int b = 0; b < BINS; ++b) {
+        acc += hist[b];
+        if (acc > tail) { bLo = b; break; }
+    }
+    acc = 0;
+    for (int b = BINS - 1; b >= 0; --b) {
+        acc += hist[b];
+        if (acc > tail) { bHi = b; break; }
+    }
+    const double binW = (hi - lo) / (BINS - 1);
+    m_autoRange = {lo + bLo * binW, lo + bHi * binW};
+    if (m_autoRange[1] <= m_autoRange[0])
+        m_autoRange = {lo, hi};
+    return m_autoRange;
 }
 
 // Display space is index * spacing: volumes are reoriented to identity
