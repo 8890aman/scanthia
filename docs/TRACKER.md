@@ -82,6 +82,45 @@ Files touched: `DicomLoader`, `Volume`, `SliceViewer`, `MprWidget`.
 
 - [ ] Pixel-shift mask subtraction mode for angio series
 
+## Phase 7 — Display & measurement parity (v1.1.2)
+
+- [x] Clinical CT window presets (Brain 110/35, Abdomen 320/50,
+      Mediastinum 400/80, Bone 2000/350, Lung 1500/-500, MIP 380/120)
+      — modality-gated; generic DICOM Default / Auto Level / Full
+      Range for MR/PT; applies to all panes
+- [x] 13 colormaps: Gray, Inverted, Hot Iron, Rainbow (PET), Bone,
+      Jet, Cool, Copper, Viridis, Hot Metal Blue, PET 20-Step,
+      Autumn, Winter
+- [x] PET SUVbw quantification (QIBA rules: decay-corrected dose,
+      Philips private factor, GML pass-through) — SUV in hover
+      readout + ROI stats
+- [x] Measurement model rebuilt: unlimited distance/ROI/angle shapes
+      per slice, each an independent annotation with draggable square
+      handles (bordered grips), dark-chip labels, live editing,
+      per-series JSON persistence (list format, legacy readable)
+- [x] ROI corners built in the in-plane u,v axes — fixes the
+      rect collapsing to a line on sagittal views
+- [x] Annotations on a dedicated layer-1 overlay renderer sharing the
+      main camera — labels/handles can never render behind the image
+      or a thick slab
+- [x] Label edge-flip: when the right-of-bounds spot would run off the
+      image edge, the label flips to the shape's left
+- [x] Physical scale ruler (1-2-5 nice lengths, mm/cm ticks + caps)
+      replacing the coordinate legend; centered camera fit
+- [x] 4-corner metadata (TL patient · TR study+slice · BL WW/WL ·
+      BR series) via plain text actors at 11pt
+- [x] Fusion badge top-center, stacked; Ctrl+U / View → Clear Fusion
+- [x] Cine snaps directly to slices (no scroll-easing) — judder gone
+- [x] A/S/P/I labels inset clear of rulers; identity-direction display
+      keeps oblique MR straight (true ITK direction kept for fusion)
+- [ ] Individual annotation select + delete (Del removes last only)
+- [ ] Hanging protocols / auto-layout
+- [ ] GSPS presentation-state save/restore (shutters, flips, graphics)
+- [ ] Curved MPR
+- [ ] Synchronized scrolling for priors/fusion
+- [ ] Sigmoid VOI LUT
+- [ ] Tile/stack mode
+
 ---
 
 ## Done this cycle (context)
