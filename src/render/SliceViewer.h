@@ -12,7 +12,6 @@
 #include <vtkImageSlice.h>
 #include <vtkImageResliceMapper.h>
 #include <vtkPlane.h>
-#include <vtkCornerAnnotation.h>
 #include <vtkActor.h>
 #include <vtkActor2D.h>
 #include <vtkPolyData.h>
@@ -265,7 +264,7 @@ private:
     QTimer m_scrollAnim;
     vtkSmartPointer<vtkActor>               m_crossLineH;
     vtkSmartPointer<vtkActor>               m_crossLineV;
-    vtkSmartPointer<vtkCornerAnnotation>    m_corner;
+    vtkSmartPointer<vtkTextActor>           m_hud[4];   // BL BR TL TR
     // Scale ruler: polydata drawn in display px (dark outline pass +
     // white pass), plus a label per axis.
     vtkSmartPointer<vtkPolyData>            m_rulerPd;

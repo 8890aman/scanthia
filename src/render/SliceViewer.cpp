@@ -127,14 +127,24 @@ SliceViewer::SliceViewer(QWidget* parent)
     m_renderer->AddActor(m_crossLineH);
     m_renderer->AddActor(m_crossLineV);
 
-    m_corner = vtkSmartPointer<vtkCornerAnnotation>::New();
-    m_corner->GetTextProperty()->SetColor(0.90, 0.92, 0.94);
-    m_corner->GetTextProperty()->SetFontSize(11);
-    // CornerAnnotation scales its font with window size — cap it small.
-    m_corner->SetMaximumFontSize(11);
-    m_corner->SetLinearFontScaleFactor(0.75);
-    m_corner->SetNonlinearFontScaleFactor(0.25);
-    m_renderer->AddActor2D(m_corner);
+    // Corner metadata: 4 plain text actors (BL BR TL TR) — reliable
+    // across render-layer changes where CornerAnnotation proved flaky.
+    const double hudPos[4][2] = {{0.012, 0.035}, {0.988, 0.035},
+                                 {0.012, 0.965}, {0.988, 0.965}};
+    for (int i = 0; i < 4; ++i) {
+        m_hud[i] = vtkSmartPointer<vtkTextActor>::New();
+        m_hud[i]->GetPositionCoordinate()
+            ->SetCoordinateSystemToNormalizedViewport();
+        m_hud[i]->SetPosition(hudPos[i][0], hudPos[i][1]);
+        auto* tp = m_hud[i]->GetTextProperty();
+        tp->SetFontSize(11);
+        tp->SetColor(0.90, 0.92, 0.94);
+        tp->SetJustification(i % 2 == 0
+                                 ? VTK_TEXT_LEFT : VTK_TEXT_RIGHT);
+        tp->SetVerticalJustification(i < 2
+                                         ? VTK_TEXT_BOTTOM : VTK_TEXT_TOP);
+        m_renderer->AddActor2D(m_hud[i]);
+    }
 
     // Physical scale ruler: a fixed "nice" length bar (20 cm, 10 cm,
     // 5 mm…) drawn in display pixels — dark outline pass under a white
@@ -1070,7 +1080,7 @@ void SliceViewer::setFusionOpacity(double o)
 
 void SliceViewer::setInfoText(const QString& text)
 {
-    m_corner->SetText(2, text.toUtf8().constData());
+    m_hud[2]->SetInput(text.toUtf8().constData());
     m_renderWindow->Render();
 }
 
@@ -1083,7 +1093,7 @@ void SliceViewer::setStudyText(const QString& text)
 
 void SliceViewer::setSeriesText(const QString& text)
 {
-    m_corner->SetText(1, text.toUtf8().constData());
+    m_hud[1]->SetInput(text.toUtf8().constData());
     m_renderWindow->Render();
 }
 
@@ -1220,7 +1230,7 @@ void SliceViewer::updateCornerText()
     if (!tr.empty())
         tr += "\n";
     tr += buf;
-    m_corner->SetText(3, tr.c_str());
+    m_hud[3]->SetInput(tr.c_str());
     if (m_slabType != 0 && m_slabMm > 0) {
         const char* names[] = {"", "AVG", "MIP", "MinIP"};
         std::snprintf(buf, sizeof(buf), "WW %.0f  WL %.0f   %s %.0fmm",
@@ -1228,7 +1238,7 @@ void SliceViewer::updateCornerText()
     } else {
         std::snprintf(buf, sizeof(buf), "WW %.0f  WL %.0f", w, c);
     }
-    m_corner->SetText(0, buf);
+    m_hud[0]->SetInput(buf);
 }
 
 // ------------------------------------------------------------------
