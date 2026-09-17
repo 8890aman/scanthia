@@ -2081,7 +2081,7 @@ void MainWindow::loadSeries(const SeriesMeta& meta)
                 //   study date / accession / institution
                 //   modality  series #  series desc  dims
                 const auto ext3 = m_volume->extent();
-                // Weasis-style 4-corner split:
+                // Four-corner HUD split:
                 //   TL patient  ·  TR study+slice  ·  BL WW/WL  ·  BR series
                 QString hud = QString::fromStdString(m.patientName) + "\n";
                 hud += "ID: " + QString::fromStdString(m.patientID);
@@ -2233,7 +2233,7 @@ void MainWindow::rebuildPresetsMenu()
     const QString mod = m_volume
         ? QString::fromStdString(m_volume->meta().modality) : "";
     for (const auto& p : kWindowPresets) {
-        // Weasis scopes presets per modality — Hounsfield windows are
+        // Presets are scoped per modality — Hounsfield windows are
         // meaningless on MR/PX signal values.
         if (*p.modality && mod != p.modality)
             continue;

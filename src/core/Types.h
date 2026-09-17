@@ -60,7 +60,7 @@ struct SeriesMeta {
     std::vector<std::string> files;
 };
 
-/// Window/level preset. Modality-scoped like Weasis's presets.xml —
+/// Window/level preset. Modality-scoped —
 /// Hounsfield windows only make sense for CT.
 struct WindowPreset {
     const char* name;
@@ -71,7 +71,7 @@ struct WindowPreset {
                             // 3=full range
 };
 
-// Fixed values from Weasis's stock presets.xml (weasis-distributions),
+// Common clinical CT window presets,
 // plus the modality-agnostic entries every viewer shows.
 inline constexpr WindowPreset kWindowPresets[] = {
     {"Brain",         110.0,   35.0, "CT"},

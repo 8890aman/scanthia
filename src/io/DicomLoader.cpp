@@ -179,7 +179,7 @@ double dicomDateTimeSec(const std::string& dt)
            num(12, 2);
 }
 
-/// QIBA SUVbw factor for a PT file — same rules as Weasis/Orthanc:
+/// QIBA SUVbw factor for a PT file — standard viewer rules:
 /// rescaled pixel value × factor = SUVbw in g/mL. Returns 0 when the
 /// required tags are missing or unsupported (not an error — the series
 /// just stays in raw units).
@@ -723,7 +723,7 @@ VolumePtr DicomLoader::loadFiles(const std::vector<std::string>& files,
     // only permutes/flips, so near-axial acquisitions keep a small
     // residual rotation in the direction matrix. Left on the vtk image,
     // the reslice mapper draws the quad rotated — tilted image with
-    // black corners. Weasis shows the raster as stored; so do we. The
+    // black corners. Show the raster as stored; The
     // ITK image keeps the true direction for fusion/registration math.
     vtkImage->SetDirectionMatrix(1, 0, 0, 0, 1, 0, 0, 0, 1);
 

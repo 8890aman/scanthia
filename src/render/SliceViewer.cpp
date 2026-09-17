@@ -127,9 +127,9 @@ SliceViewer::SliceViewer(QWidget* parent)
     m_corner->SetNonlinearFontScaleFactor(0.25);
     m_renderer->AddActor2D(m_corner);
 
-    // Weasis-style scale ruler: a fixed "nice" length bar (20 cm, 10 cm,
+    // Physical scale ruler: a fixed "nice" length bar (20 cm, 10 cm,
     // 5 mm…) drawn in display pixels — dark outline pass under a white
-    // pass, like Weasis's outlined strokes. Rebuilt on zoom/resize.
+    // pass � outlined strokes for readability. Rebuilt on zoom/resize.
     m_rulerPts = vtkSmartPointer<vtkPoints>::New();
     m_rulerPd  = vtkSmartPointer<vtkPolyData>::New();
     m_rulerPd->SetPoints(m_rulerPts);
@@ -404,7 +404,7 @@ void SliceViewer::setScaleVisible(bool on)
     m_renderWindow->Render();
 }
 
-// Weasis-style ruler: a fixed "nice" physical length (1-2-5 sequence)
+// Physical ruler: a fixed "nice" physical length (1-2-5 sequence)
 // drawn as a centred bar on the bottom and left view edges, with
 // end caps, mid ticks and 1/10 subticks. Rebuilt whenever the zoom or
 // window size changes. Hidden for unscaled volumes — labels would lie.
@@ -450,7 +450,7 @@ void SliceViewer::updateScaleRuler()
         mm = len;
         return px;
     };
-    // "20 cm" style label; also yields the tick divisor (Weasis:
+    // "20 cm" style label; also yields the tick divisor (
     // labels containing 5 → 5 divisions, containing 2 → 2, else 10).
     auto label = [](double mm, int& divisor) {
         QString s;
@@ -905,7 +905,7 @@ void SliceViewer::setActiveTool(Tool t)
     m_style->SetTool(t);
     const bool measTool =
         (t == Tool::Measure || t == Tool::Roi || t == Tool::Angle);
-    // Weasis: handles only while the shape can be edited (a measure
+    // Handles show only while the shape can be edited (a measure
     // tool active + shape on this slice); the shape itself persists.
     for (auto& an : m_annos) {
         const bool on = measTool && an.slice == m_slice;
@@ -1223,9 +1223,9 @@ void SliceViewer::updateCornerText()
 }
 
 // ------------------------------------------------------------------
-// Weasis-style annotations: a list of shapes per slice, each drawn as
+// Annotation model: a list of shapes per slice, each drawn as
 // a polyline + square handle glyphs + a world-space label placed to
-// the right of the shape bounds, vertically centred (Weasis's
+// the right of the shape bounds, vertically centred (
 // AbstractGraphic.setLabel convention).
 // ------------------------------------------------------------------
 
@@ -1258,7 +1258,7 @@ void SliceViewer::addAnnoActors(Anno& an, double r, double g, double b)
     an.handles->GetProperty()->SetColor(r, g, b);
     an.handles->GetProperty()->SetPointSize(9);   // square GL points
     m_renderer->AddActor(an.handles);
-    // Bright inner square → Weasis-style bordered handle.
+    // Bright inner square → bordered handle.
     an.handlesInner = vtkSmartPointer<vtkActor>::New();
     an.handlesInner->SetMapper(hm);   // shares the handle polydata
     an.handlesInner->GetProperty()->SetColor(0.95, 0.95, 0.95);
@@ -1301,7 +1301,7 @@ void SliceViewer::beginAnno(int kind)
     Anno an;
     an.kind  = kind;
     an.slice = m_slice;
-    // Distance/angle amber, ROI green — Weasis defaults.
+    // Distance/angle amber, ROI green.
     if (kind == 1)
         addAnnoActors(an, 0.18, 0.80, 0.44);
     else
@@ -1393,7 +1393,7 @@ void SliceViewer::rebuildAnno(Anno& an)
         hcells->InsertNextCell(1, &id);
     };
 
-    // Weasis label spot: right of the shape bounds, vertically centred.
+    // Label spot: right of the shape bounds, vertically centred.
     double lp[3] = {0, 0, plane};
     std::string label;
 
@@ -1550,7 +1550,7 @@ void SliceViewer::rebuildAnno(Anno& an)
     an.handlesInner->SetVisibility(vis && measTool ? 1 : 0);
     an.text->SetVisibility(vis && !label.empty() ? 1 : 0);
 
-    // Selection feedback (Weasis draws the selected shape heavier).
+    // Selection feedback: the dragged shape draws heavier.
     const bool sel = (m_editAnno >= 0 &&
                       &an == &m_annos[size_t(m_editAnno)]);
     an.line->GetProperty()->SetLineWidth(sel ? 3.2f : 2.0f);

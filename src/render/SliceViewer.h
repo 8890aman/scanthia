@@ -179,7 +179,7 @@ private:
     void setupCamera();
     void updateCrosshairActors();
     void updateCornerText();
-    /// Weasis-style ruler: fixed "nice" length bars (1-2-5 cm/mm)
+    /// Ruler: fixed "nice" length bars (1-2-5 cm/mm)
     /// centred on the bottom and left edges, in display pixels.
     void updateScaleRuler();
     /// Start a new annotation (kind 0=distance 1=roi 2=angle).
@@ -214,7 +214,7 @@ private:
     QString        m_studyText;   // prepended to the TR slice line
     std::array<double,3> m_crosshairIjk{0,0,0};
 
-    // Weasis-style graphics list: each annotation is a line polyline,
+    // Graphics list: each annotation is a line polyline,
     // square handle glyphs at its control points, and a world-space
     // label. Multiple annotations per slice; handles are draggable.
     struct Anno {
