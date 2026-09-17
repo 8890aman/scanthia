@@ -1368,14 +1368,27 @@ void SliceViewer::rebuildAnno(Anno& an)
     const int    axis  = axisOf(m_orientation);
     const double plane = slicePlaneOffset();
     const int    u = (axis + 1) % 3, v = (axis + 2) % 3;
-    // Lift annotation geometry a hair off the slice plane along its
-    // normal — co-planar text/lines depth-fight with the image.
-    double nrm[3] = {0, 0, 1};
-    m_plane->GetNormal(nrm);
+    // Lift annotation geometry a hair toward the camera — co-planar
+    // text/lines depth-fight with the image plane.
+    double ldir[3] = {0, 0, -1};
+    if (auto* cam = m_renderer->GetActiveCamera()) {
+        double cp[3], fp[3];
+        cam->GetPosition(cp);
+        cam->GetFocalPoint(fp);
+        double len = 0;
+        for (int i = 0; i < 3; ++i) {
+            ldir[i] = cp[i] - fp[i];
+            len += ldir[i] * ldir[i];
+        }
+        len = std::sqrt(len);
+        if (len > 1e-9)
+            for (int i = 0; i < 3; ++i)
+                ldir[i] /= len;
+    }
     const double zoff = 0.15;
     auto lift = [&](std::array<double,3>& p) {
         for (int i = 0; i < 3; ++i)
-            p[i] += nrm[i] * zoff;
+            p[i] += ldir[i] * zoff;
     };
 
     auto* pd  = vtkPolyData::SafeDownCast(an.line->GetMapper()->GetInput());
@@ -1569,7 +1582,7 @@ void SliceViewer::rebuildAnno(Anno& an)
     }
     // Lift the label off the image plane too (same z-fight).
     for (int i = 0; i < 3; ++i)
-        lp[i] += nrm[i] * zoff;
+        lp[i] += ldir[i] * zoff;
     an.text->SetInput(label.c_str());
     an.text->SetPosition(lp);
     const bool vis = (an.slice == m_slice);
