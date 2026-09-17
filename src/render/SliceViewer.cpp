@@ -1420,9 +1420,11 @@ void SliceViewer::rebuildAnno(Anno& an)
             hi[i] = std::max(an.p[0][i], an.p[1][i]);
         }
         lo[axis] = hi[axis] = plane;
-        const std::array<double,3> c00 = lo,
-            c10{hi[0], lo[1], lo[2]}, c11 = hi,
-            c01{lo[0], hi[1], hi[2]};
+        // Corners in the in-plane u,v axes — the previous index-fixed
+        // construction collapsed to a line on sagittal views.
+        std::array<double,3> c00 = lo, c10 = lo, c11 = hi, c01 = lo;
+        c10[u] = hi[u];
+        c01[v] = hi[v];
         polyline({c00, c10, c11, c01, c00});
         handle(c00); handle(c10); handle(c11); handle(c01);
         lp[u] = hi[u] + 4.0;
@@ -1586,8 +1588,10 @@ std::pair<int,int> SliceViewer::pickAnnoHandle(
                 lo[c] = std::min(an.p[0][c], an.p[1][c]);
                 hi[c] = std::max(an.p[0][c], an.p[1][c]);
             }
-            hs = {lo, {hi[0], lo[1], lo[2]}, hi,
-                  {lo[0], hi[1], hi[2]}};
+            std::array<double,3> c10 = lo, c01 = lo;
+            c10[u] = hi[u];
+            c01[v] = hi[v];
+            hs = {lo, c10, hi, c01};
         } else {
             for (int p = 0; p < an.npts; ++p)
                 hs.push_back(an.p[size_t(p)]);
