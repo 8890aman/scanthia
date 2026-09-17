@@ -1385,7 +1385,11 @@ void SliceViewer::rebuildAnno(Anno& an)
             for (int i = 0; i < 3; ++i)
                 ldir[i] /= len;
     }
-    const double zoff = 0.15;
+    // Thick-slab views render a slab whose front face is slab/2 toward
+    // the camera — lift past it or labels sit inside the projected
+    // tissue (the "label behind image" report on thick-slab studies).
+    const double zoff = 0.15 +
+        (m_slabType != 0 && m_slabMm > 0 ? m_slabMm * 0.5 : 0.0);
     auto lift = [&](std::array<double,3>& p) {
         for (int i = 0; i < 3; ++i)
             p[i] += ldir[i] * zoff;
