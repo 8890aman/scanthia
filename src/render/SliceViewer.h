@@ -243,6 +243,7 @@ private:
 
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer>            m_renderer;
+    vtkSmartPointer<vtkRenderer>            m_overlay;  // layer-1 anno pass
     vtkSmartPointer<vtkImageSlice>          m_imageActor;
     vtkSmartPointer<vtkImageResliceMapper>  m_mapper;
     vtkSmartPointer<vtkPlane>               m_plane;

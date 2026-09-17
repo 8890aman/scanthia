@@ -82,6 +82,15 @@ SliceViewer::SliceViewer(QWidget* parent)
     m_renderer->SetBackground(0.0, 0.0, 0.0);
     m_renderWindow->AddRenderer(m_renderer);
 
+    // Annotations live on a separate overlay layer rendered AFTER the
+    // image layer — they can never end up "behind" the slice or a
+    // thick slab (the reported z-index issue). Shares the camera.
+    m_overlay = vtkSmartPointer<vtkRenderer>::New();
+    m_overlay->SetLayer(1);
+    m_renderWindow->SetNumberOfLayers(2);
+    m_renderWindow->AddRenderer(m_overlay);
+    m_overlay->SetActiveCamera(m_renderer->GetActiveCamera());
+
     // vtkPlane in world space drives the reslice — image and overlay share it.
     m_plane = vtkSmartPointer<vtkPlane>::New();
     m_plane->SetNormal(0, 0, 1);
@@ -1244,7 +1253,7 @@ void SliceViewer::addAnnoActors(Anno& an, double r, double g, double b)
     an.line->SetMapper(mapper);
     an.line->GetProperty()->SetColor(r, g, b);
     an.line->GetProperty()->SetLineWidth(2.0f);
-    m_renderer->AddActor(an.line);
+    m_overlay->AddActor(an.line);
 
     auto hpts = vtkSmartPointer<vtkPoints>::New();
     auto hcells = vtkSmartPointer<vtkCellArray>::New();
@@ -1257,13 +1266,13 @@ void SliceViewer::addAnnoActors(Anno& an, double r, double g, double b)
     an.handles->SetMapper(hm);
     an.handles->GetProperty()->SetColor(r, g, b);
     an.handles->GetProperty()->SetPointSize(9);   // square GL points
-    m_renderer->AddActor(an.handles);
+    m_overlay->AddActor(an.handles);
     // Bright inner square → bordered handle.
     an.handlesInner = vtkSmartPointer<vtkActor>::New();
     an.handlesInner->SetMapper(hm);   // shares the handle polydata
     an.handlesInner->GetProperty()->SetColor(0.95, 0.95, 0.95);
     an.handlesInner->GetProperty()->SetPointSize(4);
-    m_renderer->AddActor(an.handlesInner);
+    m_overlay->AddActor(an.handlesInner);
 
     an.text = vtkSmartPointer<vtkBillboardTextActor3D>::New();
     auto* tp = an.text->GetTextProperty();
@@ -1277,15 +1286,15 @@ void SliceViewer::addAnnoActors(Anno& an, double r, double g, double b)
     tp->SetFrame(true);
     tp->SetFrameColor(r, g, b);
     tp->SetFrameWidth(1);
-    m_renderer->AddActor(an.text);
+    m_overlay->AddActor(an.text);
 }
 
 void SliceViewer::removeAnnoActors(Anno& an)
 {
-    m_renderer->RemoveActor(an.line);
-    m_renderer->RemoveActor(an.handles);
-    m_renderer->RemoveActor(an.handlesInner);
-    m_renderer->RemoveActor(an.text);
+    m_overlay->RemoveActor(an.line);
+    m_overlay->RemoveActor(an.handles);
+    m_overlay->RemoveActor(an.handlesInner);
+    m_overlay->RemoveActor(an.text);
 }
 
 void SliceViewer::setAnnoVisible(Anno& an, bool on)
@@ -1368,32 +1377,8 @@ void SliceViewer::rebuildAnno(Anno& an)
     const int    axis  = axisOf(m_orientation);
     const double plane = slicePlaneOffset();
     const int    u = (axis + 1) % 3, v = (axis + 2) % 3;
-    // Lift annotation geometry a hair toward the camera — co-planar
-    // text/lines depth-fight with the image plane.
-    double ldir[3] = {0, 0, -1};
-    if (auto* cam = m_renderer->GetActiveCamera()) {
-        double cp[3], fp[3];
-        cam->GetPosition(cp);
-        cam->GetFocalPoint(fp);
-        double len = 0;
-        for (int i = 0; i < 3; ++i) {
-            ldir[i] = cp[i] - fp[i];
-            len += ldir[i] * ldir[i];
-        }
-        len = std::sqrt(len);
-        if (len > 1e-9)
-            for (int i = 0; i < 3; ++i)
-                ldir[i] /= len;
-    }
-    // Thick-slab views render a slab whose front face is slab/2 toward
-    // the camera — lift past it or labels sit inside the projected
-    // tissue (the "label behind image" report on thick-slab studies).
-    const double zoff = 0.15 +
-        (m_slabType != 0 && m_slabMm > 0 ? m_slabMm * 0.5 : 0.0);
-    auto lift = [&](std::array<double,3>& p) {
-        for (int i = 0; i < 3; ++i)
-            p[i] += ldir[i] * zoff;
-    };
+    // Annotations render on a separate overlay layer (layer 1), so no
+    // depth-vs-image tricks are needed — they always draw on top.
 
     auto* pd  = vtkPolyData::SafeDownCast(an.line->GetMapper()->GetInput());
     auto* hpd = vtkPolyData::SafeDownCast(
@@ -1411,13 +1396,10 @@ void SliceViewer::rebuildAnno(Anno& an)
     };
     auto polyline = [&](const std::vector<std::array<double,3>>& pl) {
         cells->InsertNextCell(vtkIdType(pl.size()));
-        for (auto p : pl) {
-            lift(p);
+        for (const auto& p : pl)
             cells->InsertCellPoint(pts->InsertNextPoint(p.data()));
-        }
     };
-    auto handle = [&](std::array<double,3> p) {
-        lift(p);
+    auto handle = [&](const std::array<double,3>& p) {
         const vtkIdType id = hpts->InsertNextPoint(p.data());
         hcells->InsertNextCell(1, &id);
     };
@@ -1575,18 +1557,21 @@ void SliceViewer::rebuildAnno(Anno& an)
     hpd->Modified();
 
     // Keep the label inside the image bounds: if the right-of-shape
-    // spot would run off the edge, flip it to the shape's left.
+    // spot (anchor + text width) would run off the edge, flip it to
+    // the shape's left.
     if (m_volume && !label.empty()) {
         const double uMax =
             m_volume->extent()[u] * m_volume->spacing()[u];
-        if (lp[u] + 4.0 > uMax) {
-            const double w = 2.4 * double(label.size()) + 6.0;
-            lp[u] = std::max(2.0, shapeMinU - w);
+        size_t longest = 0, cur = 0;
+        for (const char c : label) {
+            if (c == '\n') { longest = std::max(longest, cur); cur = 0; }
+            else ++cur;
         }
+        longest = std::max(longest, cur);
+        const double w = 2.6 * double(longest) + 6.0;
+        if (lp[u] + w > uMax - 2.0)
+            lp[u] = std::max(2.0, shapeMinU - 4.0 - w);
     }
-    // Lift the label off the image plane too (same z-fight).
-    for (int i = 0; i < 3; ++i)
-        lp[i] += ldir[i] * zoff;
     an.text->SetInput(label.c_str());
     an.text->SetPosition(lp);
     const bool vis = (an.slice == m_slice);
@@ -1609,16 +1594,16 @@ void SliceViewer::rebuildAnno(Anno& an)
 std::pair<int,int> SliceViewer::pickAnnoHandle(
     const std::array<double,3>& worldPt) const
 {
-    if (!m_renderer)
+    if (!m_overlay)
         return {-1, -1};
     const int axis = axisOf(m_orientation);
     const int u = (axis + 1) % 3, v = (axis + 2) % 3;
 
     // Clicked point → display px.
-    m_renderer->SetWorldPoint(worldPt[0], worldPt[1], worldPt[2], 1.0);
-    m_renderer->WorldToDisplay();
+    m_overlay->SetWorldPoint(worldPt[0], worldPt[1], worldPt[2], 1.0);
+    m_overlay->WorldToDisplay();
     double dc[3];
-    m_renderer->GetDisplayPoint(dc);
+    m_overlay->GetDisplayPoint(dc);
 
     double best = 10.0;   // px pick radius
     int bi = -1, bp = -1;
@@ -1643,12 +1628,12 @@ std::pair<int,int> SliceViewer::pickAnnoHandle(
                 hs.push_back(an.p[size_t(p)]);
         }
         for (int p = 0; p < int(hs.size()); ++p) {
-            m_renderer->SetWorldPoint(hs[size_t(p)][0],
+            m_overlay->SetWorldPoint(hs[size_t(p)][0],
                                       hs[size_t(p)][1],
                                       hs[size_t(p)][2], 1.0);
-            m_renderer->WorldToDisplay();
+            m_overlay->WorldToDisplay();
             double hp[3];
-            m_renderer->GetDisplayPoint(hp);
+            m_overlay->GetDisplayPoint(hp);
             const double d = std::hypot(hp[0] - dc[0], hp[1] - dc[1]);
             if (d < best) {
                 best = d;
