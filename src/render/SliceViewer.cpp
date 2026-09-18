@@ -1355,7 +1355,7 @@ void SliceViewer::addAnnoActors(Anno& an, double r, double g, double b)
 
     an.text = vtkSmartPointer<vtkBillboardTextActor3D>::New();
     auto* tp = an.text->GetTextProperty();
-    tp->SetColor(r * 0.72, g * 0.72, b * 0.72);  // darker than its line
+    tp->SetColor(0.95, 0.95, 0.95);   // white — readable on any tissue
     tp->SetFontSize(13);
     tp->BoldOn();
     tp->ShadowOn();
