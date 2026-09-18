@@ -1657,6 +1657,14 @@ void MainWindow::openFiles()
         this, tr("Open DICOM Files"), {}, tr("DICOM Files (*.dcm);;All (*)"));
     if (files.isEmpty())
         return;
+    // Index each parent directory so opened files land in the
+    // library DB — plain loadFiles() only displays, it never stores.
+    QStringList dirs;
+    for (const auto& f : files)
+        dirs << QFileInfo(f).absolutePath();
+    dirs.removeDuplicates();
+    for (const auto& d : dirs)
+        scanAndList(d);
     std::vector<std::string> paths;
     for (const auto& f : files)
         paths.push_back(f.toStdString());
