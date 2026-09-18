@@ -228,43 +228,25 @@ SliceViewer::SliceViewer(QWidget* parent)
     m_fusionBadge->SetVisibility(0);
     m_renderer->AddActor2D(m_fusionBadge);
 
-    // Fusion colorbar — a thin vertical LUT ramp with white tick
-    // labels on its left (the PET/SUV scale reference viewers draw).
-    // The ramp itself is a baked texture so fully-transparent LUT
-    // entries show as a gap, not black.
-    m_fusionBarImg = vtkSmartPointer<vtkImageData>::New();
-    m_fusionBarTex = vtkSmartPointer<vtkTexture>::New();
-    m_fusionBarTex->SetInputData(m_fusionBarImg);
-    m_fusionBarTex->InterpolateOff();
-    m_fusionBar = vtkSmartPointer<vtkTexturedActor2D>::New();
-    m_fusionBar->SetTexture(m_fusionBarTex);
+    // Fusion colorbar: vertical LUT ramp + scale on the right edge of
+    // the pane (like the PET/SUV scale on vendor viewers).
+    m_fusionBar = vtkSmartPointer<vtkScalarBarActor>::New();
+    m_fusionBar->SetOrientationToVertical();
+    m_fusionBar->SetNumberOfLabels(4);
+    m_fusionBar->SetMaximumWidthInPixels(64);
+    m_fusionBar->SetMaximumHeightInPixels(320);
     m_fusionBar->GetPositionCoordinate()
-        ->SetCoordinateSystemToDisplay();
+        ->SetCoordinateSystemToNormalizedViewport();
+    m_fusionBar->SetPosition(0.905, 0.30);
+    auto* bp = m_fusionBar->GetLabelTextProperty();
+    bp->SetFontSize(10);
+    bp->SetColor(0.90, 0.92, 0.94);
+    bp->ShadowOn();
+    auto* btp = m_fusionBar->GetTitleTextProperty();
+    btp->SetFontSize(10);
+    btp->SetColor(0.95, 0.65, 0.25);   // fusion amber
     m_fusionBar->SetVisibility(0);
     m_renderer->AddActor2D(m_fusionBar);
-    for (auto& l : m_fusionBarLbl) {
-        l = vtkSmartPointer<vtkTextActor>::New();
-        auto* tp = l->GetTextProperty();
-        tp->SetFontSize(10);
-        tp->SetColor(1.0, 1.0, 1.0);
-        tp->SetJustificationToRight();
-        tp->SetVerticalJustificationToBottom();
-        tp->ShadowOn();
-        l->GetPositionCoordinate()->SetCoordinateSystemToDisplay();
-        l->SetVisibility(0);
-        m_renderer->AddActor2D(l);
-    }
-    m_fusionBarUnit = vtkSmartPointer<vtkTextActor>::New();
-    auto* utp = m_fusionBarUnit->GetTextProperty();
-    utp->SetFontSize(10);
-    utp->SetColor(1.0, 1.0, 1.0);
-    utp->SetJustificationToRight();
-    utp->SetVerticalJustificationToBottom();
-    utp->ShadowOn();
-    m_fusionBarUnit->GetPositionCoordinate()
-        ->SetCoordinateSystemToDisplay();
-    m_fusionBarUnit->SetVisibility(0);
-    m_renderer->AddActor2D(m_fusionBarUnit);
 
     // Orientation labels on the 4 view edges (R/L/A/P/H/F). Inset far
     // enough to clear the scale-ruler bars at the view edges.
@@ -876,7 +858,6 @@ void SliceViewer::resizeEvent(QResizeEvent* e)
 {
     QVTKOpenGLNativeWidget::resizeEvent(e);
     updateScaleRuler();   // mm-per-pixel changed → rebuild the ruler
-    layoutFusionBar();    // colorbar positions are display-pixel based
 }
 
 void SliceViewer::setSlice(int s)
@@ -1101,9 +1082,6 @@ void SliceViewer::setFusion(vtkImageData* img, vtkLookupTable* lut,
         m_fusionActor->SetVisibility(0);
         m_fusionMapper->SetInputData(nullptr);
         m_fusionBar->SetVisibility(0);
-        m_fusionBarUnit->SetVisibility(0);
-        for (auto& l : m_fusionBarLbl)
-            l->SetVisibility(0);
         m_renderWindow->Render();
         return;
     }
@@ -1115,11 +1093,9 @@ void SliceViewer::setFusion(vtkImageData* img, vtkLookupTable* lut,
     m_fusionMapper->SetInputConnection(colors->GetOutputPort());
     m_fusionActor->GetProperty()->SetOpacity(opacity);
     m_fusionActor->SetVisibility(1);
-    const double* r = lut->GetRange();
-    m_fusionWin[0] = r[0];
-    m_fusionWin[1] = r[1];
-    rebuildFusionBar();
-    layoutFusionBar();
+    // Colorbar mirrors the overlay LUT (labels show its value range).
+    m_fusionBar->SetLookupTable(lut);
+    m_fusionBar->SetVisibility(1);
     m_renderWindow->Render();
 }
 
@@ -1135,10 +1111,8 @@ void SliceViewer::setFusionWindow(double lo, double hi)
     if (!m_fusionLut || !m_fusionImg)
         return;
     m_fusionLut->SetTableRange(lo, hi);
-    m_fusionLut->Modified();          // don't Build() — regen'd ramps
-    m_fusionWin[0] = lo;
-    m_fusionWin[1] = hi;
-    rebuildFusionBar();               // tick labels follow the window
+    m_fusionLut->Modified();          // don't Build() — that would
+    m_fusionBar->SetLookupTable(m_fusionLut); // regen HSV ramps
     m_renderWindow->Render();
 }
 
@@ -1155,120 +1129,13 @@ void SliceViewer::setFusionColormap(int which)
         m_fusionLut->SetTableValue(i, rgba);
     }
     m_fusionLut->Modified();
-    rebuildFusionBar();
+    m_fusionBar->SetLookupTable(m_fusionLut);
     m_renderWindow->Render();
 }
 
 void SliceViewer::setFusionBarTitle(const QString& text)
 {
-    m_fusionBarUnits = text;
-    m_fusionBarUnit->SetInput(text.toUtf8().constData());
-    m_fusionBarUnit->SetVisibility(
-        !text.isEmpty() && m_fusionImg ? 1 : 0);
-    m_renderWindow->Render();
-}
-
-void SliceViewer::rebuildFusionBar()
-{
-    if (!m_fusionLut || !m_fusionImg)
-        return;
-    // Texture: x=0..3 white tick marks, x=5/25 + y=0/257 black border,
-    // x=6..24 the 19px gradient (top row = window max). LUT entries
-    // with alpha 0 stay transparent — a visible gap, not black.
-    constexpr int TEXW = 26, TEXH = 258, BARY = 1, BARX = 6;
-    m_fusionBarImg->SetDimensions(TEXW, TEXH, 1);
-    m_fusionBarImg->AllocateScalars(VTK_UNSIGNED_CHAR, 4);
-    auto* px = static_cast<unsigned char*>(
-        m_fusionBarImg->GetScalarPointer(0, 0, 0));
-    std::memset(px, 0, size_t(TEXW) * TEXH * 4);
-    auto put = [&](int x, int y, unsigned char r, unsigned char g,
-                   unsigned char b, unsigned char a) {
-        auto* p = px + (size_t(y) * TEXW + x) * 4;
-        p[0] = r; p[1] = g; p[2] = b; p[3] = a;
-    };
-    for (int row = 0; row < 256; ++row) {
-        double rgba[4];
-        m_fusionLut->GetTableValue(255 - row, rgba);
-        if (rgba[3] <= 0.0)
-            continue;                       // blank band, not black
-        for (int x = BARX; x < BARX + 19; ++x)
-            put(x, BARY + row,
-                static_cast<unsigned char>(rgba[0] * 255),
-                static_cast<unsigned char>(rgba[1] * 255),
-                static_cast<unsigned char>(rgba[2] * 255), 255);
-    }
-    const double lo = m_fusionWin[0], hi = m_fusionWin[1];
-    const double span = hi - lo;
-    if (span <= 0)
-        return;
-    for (int y = 0; y < TEXH; ++y) {        // black frame
-        put(5, y, 0, 0, 0, 255);
-        put(25, y, 0, 0, 0, 255);
-    }
-    for (int x = 5; x <= 25; ++x) {
-        put(x, 0, 0, 0, 0, 255);
-        put(x, TEXH - 1, 0, 0, 0, 255);
-    }
-
-    // Tick values: both bounds + nice 1-2-5 steps in between.
-    std::vector<double> ticks{lo, hi};
-    {
-        const double raw = span / 4.0;
-        const double mag = std::pow(10.0, std::floor(std::log10(raw)));
-        const double n = raw / mag;
-        const double step =
-            (n < 1.5 ? 1.0 : n < 3.0 ? 2.0 : n < 7.0 ? 5.0 : 10.0) * mag;
-        for (double v = std::ceil(lo / step) * step; v < hi;
-             v += step) {
-            const double frac = (v - lo) / span;
-            if (frac < 0.06 || frac > 0.94)   // would print over a bound
-                continue;
-            ticks.push_back(v);
-        }
-    }
-    int li = 0;
-    for (double v : ticks) {
-        if (li >= 6)
-            break;
-        const double frac = (v - lo) / span;      // 0 bottom → 1 top
-        const int row = BARY + int(frac * 255.0);
-        for (int x = 1; x <= 3; ++x)              // 3px white tick
-            put(x, row, 255, 255, 255, 255);
-        auto& l = m_fusionBarLbl[li++];
-        char buf[24];
-        if (std::abs(v) >= 100.0)
-            std::snprintf(buf, sizeof buf, "%.0f", v);
-        else
-            std::snprintf(buf, sizeof buf, "%.2f", v);
-        l->SetInput(buf);
-        l->GetPositionCoordinate()->SetValue(0.0, frac); // stashed
-        l->SetVisibility(1);
-    }
-    for (; li < 6; ++li)
-        m_fusionBarLbl[li]->SetVisibility(0);
-    m_fusionBarTex->Modified();
-    m_fusionBar->SetVisibility(1);
-    m_fusionBarUnit->SetVisibility(m_fusionBarUnits.isEmpty() ? 0 : 1);
-}
-
-void SliceViewer::layoutFusionBar()
-{
-    if (!m_fusionImg)
-        return;
-    const int* sz = m_renderer->GetSize();
-    const int barLeft = sz[0] - 30;         // bar content's left edge
-    const int texX = barLeft - 6, texY = sz[1] / 2 - 129;
-    m_fusionBar->SetPosition(texX, texY);
-    m_fusionBar->SetPosition2(26, 258);
-    for (auto& l : m_fusionBarLbl) {
-        if (!l->GetVisibility())
-            continue;
-        const double frac = l->GetPositionCoordinate()->GetValue()[1];
-        l->SetPosition(barLeft - 7,
-                       texY + 1 + frac * 255.0 - 5.0);
-    }
-    if (m_fusionBarUnit->GetVisibility())
-        m_fusionBarUnit->SetPosition(barLeft - 7, texY + 262);
+    m_fusionBar->SetTitle(text.toUtf8().constData());
     m_renderWindow->Render();
 }
 

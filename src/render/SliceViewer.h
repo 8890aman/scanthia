@@ -20,8 +20,7 @@
 #include <vtkTextActor.h>
 #include <vtkBillboardTextActor3D.h>
 #include <vtkLookupTable.h>
-#include <vtkTexturedActor2D.h>
-#include <vtkTexture.h>
+#include <vtkScalarBarActor.h>
 #include <vtkGenericOpenGLRenderWindow.h>
 
 #include <array>
@@ -260,18 +259,8 @@ private:
     vtkSmartPointer<vtkImageResliceMapper>  m_fusionMapper;
     vtkSmartPointer<vtkImageData>           m_fusionImg;
     vtkSmartPointer<vtkLookupTable>         m_fusionLut;
-    vtkSmartPointer<vtkTexturedActor2D>     m_fusionBar;
-    vtkSmartPointer<vtkTexture>             m_fusionBarTex;
-    vtkSmartPointer<vtkImageData>           m_fusionBarImg;
-    vtkSmartPointer<vtkTextActor>           m_fusionBarLbl[6];
-    vtkSmartPointer<vtkTextActor>           m_fusionBarUnit;
-    QString                                 m_fusionBarUnits;
-    double m_fusionWin[2] = {0.0, 0.0};
+    vtkSmartPointer<vtkScalarBarActor>      m_fusionBar;
     double m_fusionOpacity = 0.5;
-    /// Rebuild the fusion colorbar texture + tick labels.
-    void rebuildFusionBar();
-    /// Reposition the colorbar for the current pane size.
-    void layoutFusionBar();
     int    m_slabType = 0;
     double m_slabMm   = 0.0;
     bool   m_smoothing = false;
