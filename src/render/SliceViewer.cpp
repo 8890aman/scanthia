@@ -1634,14 +1634,44 @@ void SliceViewer::rebuildAnno(Anno& an)
         const double uMax =
             m_volume->extent()[u] * m_volume->spacing()[u];
         size_t longest = 0, cur = 0;
+        int lines = 1;
         for (const char c : label) {
-            if (c == '\n') { longest = std::max(longest, cur); cur = 0; }
+            if (c == '\n') { longest = std::max(longest, cur); cur = 0; ++lines; }
             else ++cur;
         }
         longest = std::max(longest, cur);
         const double w = 2.6 * double(longest) + 6.0;
+        const double h = 11.0 * lines;
         if (lp[u] + w > uMax - 2.0)
             lp[u] = std::max(2.0, shapeMinU - 4.0 - w);
+
+        // Sibling labels: when this spot overlaps a label already
+        // placed on the same slice, slide right past it; if that runs
+        // off the edge, stack vertically instead.
+        const double origU = lp[u];
+        for (int attempt = 0; attempt < 6; ++attempt) {
+            bool hit = false;
+            for (const auto& o : m_annos) {
+                if (&o == &an || o.lblW <= 0.0 || o.slice != an.slice)
+                    continue;
+                if (lp[u] < o.lblU + o.lblW && lp[u] + w > o.lblU &&
+                    lp[v] < o.lblV + o.lblH && lp[v] + h > o.lblV) {
+                    lp[u] = o.lblU + o.lblW + 2.0;
+                    hit = true;
+                    break;
+                }
+            }
+            if (!hit)
+                break;
+            if (lp[u] + w > uMax - 2.0) {
+                lp[u] = origU;
+                lp[v] += h + 3.0;
+            }
+        }
+        an.lblU = lp[u]; an.lblV = lp[v];
+        an.lblW = w;     an.lblH = h;
+    } else {
+        an.lblW = an.lblH = 0.0;
     }
     an.text->SetInput(label.c_str());
     an.text->SetPosition(lp);

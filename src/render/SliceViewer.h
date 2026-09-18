@@ -236,6 +236,9 @@ private:
         vtkSmartPointer<vtkActor>                 handles;      // color ring
         vtkSmartPointer<vtkActor>                 handlesInner; // bright core
         vtkSmartPointer<vtkBillboardTextActor3D>  text;
+        // Placed label rect (u,v space) — used to keep sibling
+        // measurement labels from printing over each other.
+        double lblU = 0.0, lblV = 0.0, lblW = 0.0, lblH = 0.0;
     };
     std::vector<Anno> m_annos;
     int m_draftAnno = -1;                 // index being drawn now
