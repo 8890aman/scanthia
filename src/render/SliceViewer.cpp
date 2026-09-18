@@ -1645,29 +1645,10 @@ void SliceViewer::rebuildAnno(Anno& an)
         if (lp[u] + w > uMax - 2.0)
             lp[u] = std::max(2.0, shapeMinU - 4.0 - w);
 
-        // Sibling labels: when this spot overlaps a label already
-        // placed on the same slice, slide right past it; if that runs
-        // off the edge, stack vertically instead.
-        const double origU = lp[u];
-        for (int attempt = 0; attempt < 6; ++attempt) {
-            bool hit = false;
-            for (const auto& o : m_annos) {
-                if (&o == &an || o.lblW <= 0.0 || o.slice != an.slice)
-                    continue;
-                if (lp[u] < o.lblU + o.lblW && lp[u] + w > o.lblU &&
-                    lp[v] < o.lblV + o.lblH && lp[v] + h > o.lblV) {
-                    lp[u] = o.lblU + o.lblW + 2.0;
-                    hit = true;
-                    break;
-                }
-            }
-            if (!hit)
-                break;
-            if (lp[u] + w > uMax - 2.0) {
-                lp[u] = origU;
-                lp[v] += h + 3.0;
-            }
-        }
+        // Auto anchor + user drag offset — labels are movable, which
+        // is how overlapping annotations get separated by hand.
+        an.anchorU = lp[u]; an.anchorV = lp[v];
+        lp[u] += an.lblOffU; lp[v] += an.lblOffV;
         an.lblU = lp[u]; an.lblV = lp[v];
         an.lblW = w;     an.lblH = h;
     } else {
@@ -1743,6 +1724,18 @@ std::pair<int,int> SliceViewer::pickAnnoHandle(
             }
         }
     }
+    // No handle hit — a click inside a label rect grabs the label
+    // itself (ptIdx 10) so it can be dragged aside.
+    if (bi == -1) {
+        for (int i = 0; i < int(m_annos.size()); ++i) {
+            const Anno& an = m_annos[size_t(i)];
+            if (an.slice != m_slice || an.lblW <= 0.0)
+                continue;
+            if (worldPt[u] >= an.lblU && worldPt[u] <= an.lblU+an.lblW &&
+                worldPt[v] >= an.lblV && worldPt[v] <= an.lblV+an.lblH)
+                return {i, 10};
+        }
+    }
     return {bi, bp};
 }
 
@@ -1754,6 +1747,14 @@ void SliceViewer::editAnnoPoint(int annoIdx, int ptIdx,
     auto& an = m_annos[size_t(annoIdx)];
     const int axis = axisOf(m_orientation);
     const int u = (axis + 1) % 3, v = (axis + 2) % 3;
+
+    if (ptIdx == 10) {              // label drag: offset from the
+        an.lblOffU = worldPt[u] - an.anchorU;   // auto anchor spot
+        an.lblOffV = worldPt[v] - an.anchorV;
+        rebuildAnno(an);
+        m_renderWindow->Render();
+        return;
+    }
 
     if (an.kind == 1) {
         // Corner handles: 0=(au,av) 1=(bu,av) 2=(bu,bv) 3=(au,bv)

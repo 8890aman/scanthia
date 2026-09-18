@@ -236,9 +236,11 @@ private:
         vtkSmartPointer<vtkActor>                 handles;      // color ring
         vtkSmartPointer<vtkActor>                 handlesInner; // bright core
         vtkSmartPointer<vtkBillboardTextActor3D>  text;
-        // Placed label rect (u,v space) — used to keep sibling
-        // measurement labels from printing over each other.
+        // Placed label rect (u,v space) — hit-tested so the label
+        // can be dragged to a new spot like a handle.
         double lblU = 0.0, lblV = 0.0, lblW = 0.0, lblH = 0.0;
+        double anchorU = 0.0, anchorV = 0.0;   // auto anchor spot
+        double lblOffU = 0.0, lblOffV = 0.0;   // user drag offset
     };
     std::vector<Anno> m_annos;
     int m_draftAnno = -1;                 // index being drawn now
