@@ -1826,6 +1826,32 @@ void fillColorLut(vtkLookupTable* lut, int which)
 
 } // namespace
 
+QImage SliceViewer::colorMapPreview(int which, int w, int h)
+{
+    auto lut = vtkSmartPointer<vtkLookupTable>::New();
+    lut->SetNumberOfTableValues(256);
+    lut->SetTableRange(0.0, 1.0);
+    if (which == 0) {
+        lut->SetHueRange(0, 0);
+        lut->SetSaturationRange(0, 0);
+        lut->SetValueRange(0, 1);
+        lut->Build();
+    } else {
+        fillColorLut(lut, which);
+    }
+    QImage img(w, h, QImage::Format_RGB32);
+    for (int x = 0; x < w; ++x) {
+        double rgba[4];
+        lut->GetTableValue(w == 1 ? 255 : int(x * 255.0 / (w - 1)),
+                           rgba);
+        const QRgb c = qRgb(int(rgba[0] * 255), int(rgba[1] * 255),
+                            int(rgba[2] * 255));
+        for (int y = 0; y < h; ++y)
+            img.setPixel(x, y, c);
+    }
+    return img;
+}
+
 void SliceViewer::setColorMap(int which)
 {
     auto* prop = m_imageActor->GetProperty();

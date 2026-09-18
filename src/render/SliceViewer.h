@@ -85,6 +85,10 @@ public:
     /// Units label on the fusion colorbar (e.g. "SUV", "" hides).
     void setFusionBarTitle(const QString& text);
 
+    /// Render a colormap as a small preview image (for menu/toolbar
+    /// icons). `which` uses the Color Map menu index (0 = grayscale).
+    static QImage colorMapPreview(int which, int w, int h);
+
     /// Hide all drawn annotations (measure lines, ROI, angle, text).
     void clearAnnotations();
 

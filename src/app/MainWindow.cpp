@@ -1214,7 +1214,7 @@ void MainWindow::buildMenus()
 
     // Color lookup tables (applied after window/level).
     auto* lutMenu = view->addMenu(tr("Color Map"));
-    auto* lutGroup = new QActionGroup(this);
+    auto* lutGroup = m_lutGroup = new QActionGroup(this);
     const char* luts[] = {"Grayscale", "Inverted Gray", "Hot Iron",
                           "Rainbow (PET)", "Bone",
                           "Jet", "Cool", "Copper", "Viridis",
@@ -1615,6 +1615,32 @@ void MainWindow::buildToolbar()
                 m_compareView->setEditLabel(v);
             });
     tb->addWidget(labelSpin);
+
+    // Colormap dropdown with live gradient previews — same list as
+    // View → Color Map, kept in sync via the shared action group.
+    tb->addSeparator();
+    auto* lutCombo = new QComboBox(tb);
+    lutCombo->setIconSize({56, 12});
+    lutCombo->setMinimumContentsLength(12);
+    static const char* lutNames[] = {
+        "Grayscale", "Inverted Gray", "Hot Iron", "Rainbow (PET)",
+        "Bone", "Jet", "Cool", "Copper", "Viridis",
+        "Hot Metal Blue", "PET 20-Step", "Autumn", "Winter"};
+    for (int i = 0; i < int(std::size(lutNames)); ++i)
+        lutCombo->addItem(
+            QIcon(QPixmap::fromImage(
+                SliceViewer::colorMapPreview(i, 56, 12))),
+            tr(lutNames[i]));
+    lutCombo->setCurrentIndex(0);
+    connect(lutCombo, qOverload<int>(&QComboBox::activated), this,
+            [this](int i) {
+                m_mpr->setColorMap(i);
+                m_singleView->setColorMap(i);
+                m_compareView->setColorMap(i);
+                if (m_lutGroup && i < m_lutGroup->actions().size())
+                    m_lutGroup->actions().at(i)->setChecked(true);
+            });
+    tb->addWidget(lutCombo);
 }
 
 void MainWindow::openFolder()
