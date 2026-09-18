@@ -397,6 +397,24 @@ void MprWidget::setFusionOpacity(double o)
         v->setFusionOpacity(o);
 }
 
+void MprWidget::setFusionWindow(double lo, double hi)
+{
+    for (auto* v : m_views)
+        v->setFusionWindow(lo, hi);
+}
+
+void MprWidget::setFusionColormap(int which)
+{
+    for (auto* v : m_views)
+        v->setFusionColormap(which);
+}
+
+void MprWidget::setFusionBarTitle(const QString& text)
+{
+    for (auto* v : m_views)
+        v->setFusionBarTitle(text);
+}
+
 void MprWidget::setObliqueAngles(double pitchDeg, double yawDeg)
 {
     if (m_activeView)

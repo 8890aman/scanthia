@@ -84,6 +84,7 @@
 
 #include <vtkImageData.h>
 #include <vtkImageGaussianSmooth.h>
+#include <vtkImageShiftScale.h>
 #include <vtkLookupTable.h>
 #include <vtkPointData.h>
 
@@ -1267,6 +1268,40 @@ void MainWindow::buildMenus()
         a->setChecked(pct == 50.0);
         fusGroup->addAction(a);
     }
+    // Fusion overlay colormap — any of the 13 maps applied to the
+    // overlaid modality only (base stays grayscale).
+    auto* fusLutMenu = view->addMenu(tr("Fusion Colormap"));
+    for (int i = 1; i < int(std::size(luts)); ++i) {
+        fusLutMenu->addAction(tr(luts[i]), this, [this, i] {
+            m_mpr->setFusionColormap(i);
+            m_singleView->setFusionColormap(i);
+        });
+    }
+    // Fusion overlay value window — SUV presets for PT, percentile
+    // cuts for generic overlays.
+    auto* fusWinMenu = view->addMenu(tr("Fusion Window"));
+    auto fusWin = [this, fusWinMenu](const QString& label,
+                                   double lo, double hi) {
+        fusWinMenu->addAction(label, this, [this, lo, hi] {
+            double wlo = lo, whi = hi;
+            if (lo == 0.0 && hi == 0.0) {          // sentinel: full range
+                wlo = m_fusionRange[0];
+                whi = m_fusionRange[1];
+            } else if (lo < 0.0) {                 // sentinel: top N%
+                wlo = m_fusionRange[0] +
+                      (m_fusionRange[1] - m_fusionRange[0]) * hi;
+                whi = m_fusionRange[1];
+            }
+            m_mpr->setFusionWindow(wlo, whi);
+            m_singleView->setFusionWindow(wlo, whi);
+        });
+    };
+    fusWin(tr("Full Range"), 0.0, 0.0);
+    fusWin(tr("SUV 0\u20135"),  0.0, 5.0);
+    fusWin(tr("SUV 0\u201310"), 0.0, 10.0);
+    fusWin(tr("SUV 0\u201320"), 0.0, 20.0);
+    fusWin(tr("Top 50%"),     -1.0, 0.50);
+    fusWin(tr("Top 25%"),     -1.0, 0.75);
     view->addAction(tr("Clear Fusion (Ctrl+U)"), QKeySequence("Ctrl+U"),
                     this, [this] { clearFusion(); });
 
@@ -2043,6 +2078,8 @@ void MainWindow::loadSeries(const SeriesMeta& meta)
                     m_fusionImg = nullptr;
                     m_fusionLut = nullptr;
                     m_fusionName.clear();
+                    m_fusionUnits.clear();
+                    m_fusionRange[0] = m_fusionRange[1] = 0.0;
                     m_mpr->setFusion(nullptr, nullptr, 0);
                     m_singleView->setFusion(nullptr, nullptr, 0);
                     m_mpr->setFusionBadge(QString());
@@ -3089,13 +3126,30 @@ void MainWindow::fuseSeries(const QString& uid)
                 blurred->DeepCopy(smooth->GetOutput());
                 img = blurred;
             }
-            QMetaObject::invokeMethod(this, [this, img, name] {
+            // Scale PET overlays to SUVbw so the fusion window +
+            // colorbar read in clinical units.
+            const double suv = fused->meta().suvFactor;
+            if (suv > 0.0) {
+                auto ss = vtkSmartPointer<vtkImageShiftScale>::New();
+                ss->SetInputData(img);
+                ss->SetScale(suv);
+                ss->SetOutputScalarTypeToFloat();
+                ss->Update();
+                auto suvImg = vtkSmartPointer<vtkImageData>::New();
+                suvImg->DeepCopy(ss->GetOutput());
+                img = suvImg;
+            }
+            QMetaObject::invokeMethod(this, [this, img, name, suv] {
                 if (!m_volume)
                     return;
                 // Hot-iron LUT with an alpha ramp — below ~25% of max
                 // the fusion is transparent so anatomy shows through.
                 double range[2];
                 img->GetScalarRange(range);
+                m_fusionRange[0] = range[0];
+                m_fusionRange[1] = range[1];
+                m_fusionUnits = suv > 0.0 ? QStringLiteral("SUV")
+                                          : QString();
                 const double lo = range[0] + (range[1] - range[0]) * 0.25;
                 auto lut = vtkSmartPointer<vtkLookupTable>::New();
                 lut->SetNumberOfTableValues(256);
@@ -3110,6 +3164,8 @@ void MainWindow::fuseSeries(const QString& uid)
                 m_fusionName = name;
                 m_mpr->setFusion(img, lut, 0.5);
                 m_singleView->setFusion(img, lut, 0.5);
+                m_mpr->setFusionBarTitle(m_fusionUnits);
+                m_singleView->setFusionBarTitle(m_fusionUnits);
                 // Persistent badge so it's always clear which series is
                 // overlaid on which — with the clear shortcut next to it.
                 const QString base =
@@ -3137,6 +3193,8 @@ void MainWindow::clearFusion()
     m_fusionImg = nullptr;
     m_fusionLut = nullptr;
     m_fusionName.clear();
+    m_fusionUnits.clear();
+    m_fusionRange[0] = m_fusionRange[1] = 0.0;
     m_mpr->setFusion(nullptr, nullptr, 0);
     m_singleView->setFusion(nullptr, nullptr, 0);
     m_mpr->setFusionBadge(QString());

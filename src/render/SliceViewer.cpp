@@ -66,6 +66,10 @@ void setLine(vtkActor* actor, const std::array<double,3>& a,
     src->Modified();
 }
 
+/// Fill a 256-entry LUT with one of the standard colormaps (index
+/// matches the View → Color Map menu order). Defined below.
+void fillColorLut(vtkLookupTable* lut, int which);
+
 } // namespace
 
 SliceViewer::SliceViewer(QWidget* parent)
@@ -223,6 +227,26 @@ SliceViewer::SliceViewer(QWidget* parent)
     m_fusionBadge->SetPosition(0.5, 0.975);
     m_fusionBadge->SetVisibility(0);
     m_renderer->AddActor2D(m_fusionBadge);
+
+    // Fusion colorbar: vertical LUT ramp + scale on the right edge of
+    // the pane (like the PET/SUV scale on vendor viewers).
+    m_fusionBar = vtkSmartPointer<vtkScalarBarActor>::New();
+    m_fusionBar->SetOrientationToVertical();
+    m_fusionBar->SetNumberOfLabels(4);
+    m_fusionBar->SetMaximumWidthInPixels(64);
+    m_fusionBar->SetMaximumHeightInPixels(320);
+    m_fusionBar->GetPositionCoordinate()
+        ->SetCoordinateSystemToNormalizedViewport();
+    m_fusionBar->SetPosition(0.905, 0.30);
+    auto* bp = m_fusionBar->GetLabelTextProperty();
+    bp->SetFontSize(10);
+    bp->SetColor(0.90, 0.92, 0.94);
+    bp->ShadowOn();
+    auto* btp = m_fusionBar->GetTitleTextProperty();
+    btp->SetFontSize(10);
+    btp->SetColor(0.95, 0.65, 0.25);   // fusion amber
+    m_fusionBar->SetVisibility(0);
+    m_renderer->AddActor2D(m_fusionBar);
 
     // Orientation labels on the 4 view edges (R/L/A/P/H/F). Inset far
     // enough to clear the scale-ruler bars at the view edges.
@@ -1057,6 +1081,7 @@ void SliceViewer::setFusion(vtkImageData* img, vtkLookupTable* lut,
     if (!img) {
         m_fusionActor->SetVisibility(0);
         m_fusionMapper->SetInputData(nullptr);
+        m_fusionBar->SetVisibility(0);
         m_renderWindow->Render();
         return;
     }
@@ -1068,6 +1093,9 @@ void SliceViewer::setFusion(vtkImageData* img, vtkLookupTable* lut,
     m_fusionMapper->SetInputConnection(colors->GetOutputPort());
     m_fusionActor->GetProperty()->SetOpacity(opacity);
     m_fusionActor->SetVisibility(1);
+    // Colorbar mirrors the overlay LUT (labels show its value range).
+    m_fusionBar->SetLookupTable(lut);
+    m_fusionBar->SetVisibility(1);
     m_renderWindow->Render();
 }
 
@@ -1075,6 +1103,39 @@ void SliceViewer::setFusionOpacity(double o)
 {
     m_fusionOpacity = o;
     m_fusionActor->GetProperty()->SetOpacity(o);
+    m_renderWindow->Render();
+}
+
+void SliceViewer::setFusionWindow(double lo, double hi)
+{
+    if (!m_fusionLut || !m_fusionImg)
+        return;
+    m_fusionLut->SetTableRange(lo, hi);
+    m_fusionLut->Modified();          // don't Build() — that would
+    m_fusionBar->SetLookupTable(m_fusionLut); // regen HSV ramps
+    m_renderWindow->Render();
+}
+
+void SliceViewer::setFusionColormap(int which)
+{
+    if (!m_fusionLut || which < 1)
+        return;
+    fillColorLut(m_fusionLut, which);
+    // Re-apply the fade-in alpha ramp — fillColorLut bakes alpha=1.
+    for (int i = 0; i < 256; ++i) {
+        double rgba[4];
+        m_fusionLut->GetTableValue(i, rgba);
+        rgba[3] = i / 255.0;
+        m_fusionLut->SetTableValue(i, rgba);
+    }
+    m_fusionLut->Modified();
+    m_fusionBar->SetLookupTable(m_fusionLut);
+    m_renderWindow->Render();
+}
+
+void SliceViewer::setFusionBarTitle(const QString& text)
+{
+    m_fusionBar->SetTitle(text.toUtf8().constData());
     m_renderWindow->Render();
 }
 
@@ -1685,22 +1746,14 @@ void SliceViewer::editAnnoPoint(int annoIdx, int ptIdx,
     emit annotationsChanged();
 }
 
-void SliceViewer::setColorMap(int which)
+namespace {
+
+/// Fill a 256-entry LUT with one of the standard colormaps (index
+/// matches the View → Color Map menu order).
+void fillColorLut(vtkLookupTable* lut, int which)
 {
-    auto* prop = m_imageActor->GetProperty();
-    if (which == 0) {
-        prop->SetLookupTable(nullptr);
-        prop->SetUseLookupTableScalarRange(0);
-        m_renderWindow->Render();
-        return;
-    }
-
-    m_colorLut = vtkSmartPointer<vtkLookupTable>::New();
-    m_colorLut->SetNumberOfTableValues(256);
-    m_colorLut->SetTableRange(0.0, 1.0); // input = windowed value
-
     // Piecewise-linear ramp through RGB anchor points.
-    auto ramp = [this](std::initializer_list<std::array<double,3>> pts) {
+    auto ramp = [lut](std::initializer_list<std::array<double,3>> pts) {
         const int n = int(pts.size());
         for (int i = 0; i < 256; ++i) {
             const double t = i / 255.0 * (n - 1);
@@ -1708,7 +1761,7 @@ void SliceViewer::setColorMap(int which)
             const double f = t - k;
             const auto& a = *(pts.begin() + k);
             const auto& b = *(pts.begin() + k + 1);
-            m_colorLut->SetTableValue(i,
+            lut->SetTableValue(i,
                 a[0] + (b[0] - a[0]) * f,
                 a[1] + (b[1] - a[1]) * f,
                 a[2] + (b[2] - a[2]) * f, 1.0);
@@ -1717,17 +1770,17 @@ void SliceViewer::setColorMap(int which)
 
     switch (which) {
     case 1: // inverted grayscale
-        m_colorLut->SetHueRange(0, 0);
-        m_colorLut->SetSaturationRange(0, 0);
-        m_colorLut->SetValueRange(1, 0);
+        lut->SetHueRange(0, 0);
+        lut->SetSaturationRange(0, 0);
+        lut->SetValueRange(1, 0);
         break;
     case 2: // hot iron (black -> red -> orange -> yellow -> white)
         ramp({{0,0,0}, {1,0,0}, {1,1,0}, {1,1,1}});
         break;
     case 3: // PET-style rainbow
-        m_colorLut->SetHueRange(0.6667, 0.0);
-        m_colorLut->SetSaturationRange(1, 1);
-        m_colorLut->SetValueRange(1, 1);
+        lut->SetHueRange(0.6667, 0.0);
+        lut->SetSaturationRange(1, 1);
+        lut->SetValueRange(1, 1);
         break;
     case 4: // bone-ish sepia
         ramp({{0,0,0}, {0.38,0.34,0.30}, {0.79,0.74,0.68}, {1,1,0.96}});
@@ -1756,8 +1809,8 @@ void SliceViewer::setColorMap(int which)
             const int band = std::min(int(i / 255.0 * 20), 19);
             const double h = (1.0 - band / 19.0) * 0.6667;
             const QColor c = QColor::fromHsvF(h, 1.0, 1.0);
-            m_colorLut->SetTableValue(i, c.redF(), c.greenF(),
-                                      c.blueF(), 1.0);
+            lut->SetTableValue(i, c.redF(), c.greenF(),
+                               c.blueF(), 1.0);
         }
         break;
     case 11: // Autumn (MATLAB): red -> yellow
@@ -1767,9 +1820,25 @@ void SliceViewer::setColorMap(int which)
         ramp({{0,0,1}, {0,1,0.5}});
         break;
     }
-    m_colorLut->SetAlphaRange(1, 1);
-    m_colorLut->Build();
+    lut->SetAlphaRange(1, 1);
+    lut->Build();
+}
 
+} // namespace
+
+void SliceViewer::setColorMap(int which)
+{
+    auto* prop = m_imageActor->GetProperty();
+    if (which == 0) {
+        prop->SetLookupTable(nullptr);
+        prop->SetUseLookupTableScalarRange(0);
+        m_renderWindow->Render();
+        return;
+    }
+    m_colorLut = vtkSmartPointer<vtkLookupTable>::New();
+    m_colorLut->SetNumberOfTableValues(256);
+    m_colorLut->SetTableRange(0.0, 1.0); // input = windowed value
+    fillColorLut(m_colorLut, which);
     // LUT input is the normalized post-window/level value.
     prop->SetUseLookupTableScalarRange(0);
     prop->SetLookupTable(m_colorLut);

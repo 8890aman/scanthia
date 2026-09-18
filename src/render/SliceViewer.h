@@ -20,6 +20,7 @@
 #include <vtkTextActor.h>
 #include <vtkBillboardTextActor3D.h>
 #include <vtkLookupTable.h>
+#include <vtkScalarBarActor.h>
 #include <vtkGenericOpenGLRenderWindow.h>
 
 #include <array>
@@ -77,6 +78,12 @@ public:
     void setFusion(vtkImageData* img, vtkLookupTable* lut,
                    double opacity = 0.5);
     void setFusionOpacity(double o);
+    /// Adjust the overlay LUT's value window.
+    void setFusionWindow(double lo, double hi);
+    /// Apply one of the standard colormaps to the overlay LUT.
+    void setFusionColormap(int which);
+    /// Units label on the fusion colorbar (e.g. "SUV", "" hides).
+    void setFusionBarTitle(const QString& text);
 
     /// Hide all drawn annotations (measure lines, ROI, angle, text).
     void clearAnnotations();
@@ -252,6 +259,7 @@ private:
     vtkSmartPointer<vtkImageResliceMapper>  m_fusionMapper;
     vtkSmartPointer<vtkImageData>           m_fusionImg;
     vtkSmartPointer<vtkLookupTable>         m_fusionLut;
+    vtkSmartPointer<vtkScalarBarActor>      m_fusionBar;
     double m_fusionOpacity = 0.5;
     int    m_slabType = 0;
     double m_slabMm   = 0.0;

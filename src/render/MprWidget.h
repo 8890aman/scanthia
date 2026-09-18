@@ -49,6 +49,9 @@ public:
     /// Fused modality (PET on CT) shown through a hot LUT + alpha ramp.
     void setFusion(vtkImageData* img, vtkLookupTable* lut, double opacity);
     void setFusionOpacity(double o);
+    void setFusionWindow(double lo, double hi);
+    void setFusionColormap(int which);
+    void setFusionBarTitle(const QString& text);
     /// "FUSION: <series>" badge on all slice views; empty hides it.
     void setFusionBadge(const QString& name);
     /// Oblique MPR: rotate the active view's plane. (0,0) resets.

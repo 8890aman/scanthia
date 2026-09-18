@@ -172,6 +172,8 @@ private:
     vtkSmartPointer<vtkImageData>    m_fusionImg;
     vtkSmartPointer<vtkLookupTable>  m_fusionLut;
     QString                          m_fusionName;   // overlaid series
+    QString                          m_fusionUnits;  // "SUV" for scaled PT
+    double                           m_fusionRange[2] = {0.0, 0.0};
     QString       m_modelPath;       // loaded ONNX model path
     QLabel*       m_modelStatus;     // shows loaded model name in status bar
     QMenu*        m_modelMenu = nullptr;
