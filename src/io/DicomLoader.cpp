@@ -91,8 +91,42 @@ bool readPixelSpacing(const itk::MetaDataDictionary& dict,
         } catch (...) {
             continue;
         }
-        if (sx > 0 && sy > 0)
-            return true;
+        if (sx <= 0 || sy <= 0)
+            continue;
+        // ImagerPixelSpacing is detector-plane: on projection
+        // modalities the patient plane is magnified. Divide by the
+        // EstimatedRadiographicMagnificationFactor, or derive it from
+        // DistanceSourceToDetector / DistanceSourceToPatient.
+        if (std::string(key) == "0018|1164") {
+            const std::string mod = getTagString(dict, "0008|0060");
+            const bool proj =
+                mod == "CR" || mod == "DX" || mod == "IO" ||
+                mod == "MG" || mod == "PX" || mod == "RF" || mod == "XA";
+            if (proj) {
+                double factor = 0;
+                const auto mf = getTagString(dict, "0018|1114");
+                if (!mf.empty()) {
+                    try { factor = std::stod(mf); } catch (...) {}
+                }
+                if (factor <= 0) {
+                    const auto sid = getTagString(dict, "0018|1110");
+                    const auto sod = getTagString(dict, "0018|1111");
+                    if (!sid.empty() && !sod.empty()) {
+                        try {
+                            const double ds = std::stod(sid),
+                                         dp = std::stod(sod);
+                            if (ds > 0 && dp > 0)
+                                factor = ds / dp;
+                        } catch (...) {}
+                    }
+                }
+                if (factor > 0) {
+                    sx /= factor;
+                    sy /= factor;
+                }
+            }
+        }
+        return true;
     }
     return false;
 }
