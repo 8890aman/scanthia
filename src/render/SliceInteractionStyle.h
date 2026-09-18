@@ -45,6 +45,7 @@ public:
                        std::array<double,3>)>                       onAngle;
     std::function<void()>                             onActivated;
     std::function<void(std::array<double,3>)>         onHovered; // world pt
+    std::function<void(std::array<double,3>)>         onCursorCheck; // hover cursor hint
     /// Paint/erase at world point — brush & eraser tools.
     std::function<void(std::array<double,3>, bool)>   onPaint;
     std::function<void(bool)>                         onStroke;  // begin/end

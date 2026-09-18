@@ -214,6 +214,8 @@ private:
         const std::array<double,3>& worldPt) const;
     void editAnnoPoint(int annoIdx, int ptIdx,
                        const std::array<double,3>& worldPt);
+    /// True when `worldPt` falls inside a placed label rect.
+    bool annoLabelAt(const std::array<double,3>& worldPt) const;
 
     VolumePtr      m_volume;
     Orientation    m_orientation = Orientation::Axial;

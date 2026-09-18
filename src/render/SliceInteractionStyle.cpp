@@ -35,6 +35,8 @@ void SliceInteractionStyle::OnMouseMove()
     }
     if (!m_measuring && pickPoint && onHovered)
         onHovered(pickPoint(pos[0], pos[1]));
+    if (!m_measuring && pickPoint && onCursorCheck)
+        onCursorCheck(pickPoint(pos[0], pos[1]));
     if (m_painting && pickPoint && onPaint)
         onPaint(pickPoint(pos[0], pos[1]), m_tool == Tool::Eraser);
     // Custom W/L drag — dx right widens the window (less contrast),

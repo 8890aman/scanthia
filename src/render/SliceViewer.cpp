@@ -322,6 +322,14 @@ SliceViewer::SliceViewer(QWidget* parent)
     m_style->onMeasureEdit = [this](std::array<double,3> p) {
         editAnnoPoint(m_editAnno, m_editPt, p);
     };
+    m_style->onCursorCheck = [this](std::array<double,3> p) {
+        if (m_editAnno >= 0 && m_editPt == 10)
+            setCursor(Qt::ClosedHandCursor);      // mid label-drag
+        else if (annoLabelAt(p))
+            setCursor(Qt::OpenHandCursor);        // grabbable label
+        else
+            unsetCursor();
+    };
     m_style->onMeasured = [this](std::array<double,3> a,
                                  std::array<double,3> b) {
         updateMeasureActors(a, b);
@@ -1347,7 +1355,7 @@ void SliceViewer::addAnnoActors(Anno& an, double r, double g, double b)
 
     an.text = vtkSmartPointer<vtkBillboardTextActor3D>::New();
     auto* tp = an.text->GetTextProperty();
-    tp->SetColor(r, g, b);
+    tp->SetColor(r * 0.72, g * 0.72, b * 0.72);  // darker than its line
     tp->SetFontSize(13);
     tp->BoldOn();
     tp->ShadowOn();
@@ -1381,11 +1389,20 @@ void SliceViewer::beginAnno(int kind)
     Anno an;
     an.kind  = kind;
     an.slice = m_slice;
-    // Distance/angle amber, ROI green.
-    if (kind == 1)
-        addAnnoActors(an, 0.18, 0.80, 0.44);
-    else
-        addAnnoActors(an, 1.0, 0.85, 0.1);
+    // Each measurement gets its own bright, well-separated color —
+    // no two neighbouring annotations share a hue.
+    static const double kAnnoColors[][3] = {
+        {1.00, 0.85, 0.10},   // amber
+        {0.20, 0.90, 1.00},   // cyan
+        {0.45, 1.00, 0.35},   // green
+        {1.00, 0.45, 0.75},   // pink
+        {1.00, 0.60, 0.10},   // orange
+        {0.65, 0.55, 1.00},   // lavender
+        {0.55, 1.00, 0.80},   // mint
+        {1.00, 0.35, 0.30},   // coral
+    };
+    const auto& c = kAnnoColors[m_annos.size() % 8];
+    addAnnoActors(an, c[0], c[1], c[2]);
     m_annos.push_back(an);
     m_draftAnno = int(m_annos.size()) - 1;
 }
@@ -1737,6 +1754,20 @@ std::pair<int,int> SliceViewer::pickAnnoHandle(
         }
     }
     return {bi, bp};
+}
+
+bool SliceViewer::annoLabelAt(const std::array<double,3>& worldPt) const
+{
+    const int axis = axisOf(m_orientation);
+    const int u = (axis + 1) % 3, v = (axis + 2) % 3;
+    for (const auto& an : m_annos) {
+        if (an.slice != m_slice || an.lblW <= 0.0)
+            continue;
+        if (worldPt[u] >= an.lblU && worldPt[u] <= an.lblU + an.lblW &&
+            worldPt[v] >= an.lblV && worldPt[v] <= an.lblV + an.lblH)
+            return true;
+    }
+    return false;
 }
 
 void SliceViewer::editAnnoPoint(int annoIdx, int ptIdx,
