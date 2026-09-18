@@ -954,12 +954,10 @@ void SliceViewer::autoWindowLevel()
 void SliceViewer::setActiveTool(Tool t)
 {
     m_style->SetTool(t);
-    const bool measTool =
-        (t == Tool::Measure || t == Tool::Roi || t == Tool::Angle);
-    // Handles show only while the shape can be edited (a measure
-    // tool active + shape on this slice); the shape itself persists.
+    // Endpoint markers stay visible on the current slice whatever
+    // tool is active — they're part of the annotation itself.
     for (auto& an : m_annos) {
-        const bool on = measTool && an.slice == m_slice;
+        const bool on = (an.slice == m_slice);
         an.handles->SetVisibility(on);
         an.handlesInner->SetVisibility(on);
     }
@@ -1038,14 +1036,11 @@ void SliceViewer::updateAnnotationVisibility()
 {
     // Annotations live on the slice where they were drawn — hide them on
     // other slices instead of letting the label float over new anatomy.
-    const bool measTool = (m_style->GetTool() == Tool::Measure ||
-                           m_style->GetTool() == Tool::Roi ||
-                           m_style->GetTool() == Tool::Angle);
     for (auto& an : m_annos) {
         const bool here = (an.slice == m_slice);
         an.line->SetVisibility(here ? 1 : 0);
-        an.handles->SetVisibility(here && measTool ? 1 : 0);
-        an.handlesInner->SetVisibility(here && measTool ? 1 : 0);
+        an.handles->SetVisibility(here ? 1 : 0);
+        an.handlesInner->SetVisibility(here ? 1 : 0);
         an.text->SetVisibility(here ? 1 : 0);
     }
 }
@@ -1358,7 +1353,7 @@ void SliceViewer::addAnnoActors(Anno& an, double r, double g, double b)
     tp->SetColor(0.95, 0.95, 0.95);   // white — readable on any tissue
     tp->SetFontSize(13);
     tp->BoldOn();
-    tp->ShadowOn();
+    tp->ShadowOff();                  // no smear behind the text
     // Dark translucent chip behind the text — readable on bright tissue.
     tp->SetBackgroundColor(0.05, 0.05, 0.05);
     tp->SetBackgroundOpacity(0.55);
@@ -1675,11 +1670,10 @@ void SliceViewer::rebuildAnno(Anno& an)
     an.text->SetPosition(lp);
     const bool vis = (an.slice == m_slice);
     setAnnoVisible(an, vis);
-    const bool measTool = (m_style->GetTool() == Tool::Measure ||
-                           m_style->GetTool() == Tool::Roi ||
-                           m_style->GetTool() == Tool::Angle);
-    an.handles->SetVisibility(vis && measTool ? 1 : 0);
-    an.handlesInner->SetVisibility(vis && measTool ? 1 : 0);
+    // Endpoint markers stay visible regardless of the active tool —
+    // they're part of the annotation, not just edit affordances.
+    an.handles->SetVisibility(vis ? 1 : 0);
+    an.handlesInner->SetVisibility(vis ? 1 : 0);
     an.text->SetVisibility(vis && !label.empty() ? 1 : 0);
 
     // Selection feedback: the dragged shape draws heavier.
