@@ -649,14 +649,12 @@ VolumePtr DicomLoader::loadFiles(const std::vector<std::string>& files,
             io->SetFileName(use.front());
             try {
                 io->ReadImageInformation();
-                const auto ips = getTagString(
-                    io->GetMetaDataDictionary(), "0018|1164");
-                if (!ips.empty()) {
-                    const auto bs = ips.find('\\');
+                double fx = 0, fy = 0;
+                if (readPixelSpacing(io->GetMetaDataDictionary(),
+                                     fx, fy)) {
                     ImageType::SpacingType fixed = sp;
-                    fixed[0] = std::stod(ips.substr(0, bs));
-                    if (bs != std::string::npos)
-                        fixed[1] = std::stod(ips.substr(bs + 1));
+                    fixed[0] = fx;
+                    fixed[1] = fy;
                     image->SetSpacing(fixed);
                 }
             } catch (...) {}
@@ -694,7 +692,12 @@ VolumePtr DicomLoader::loadFiles(const std::vector<std::string>& files,
         const auto cur = image->GetSpacing();
         const bool placeholder =
             std::abs(cur[0] - 1.0) < 1e-3 && std::abs(cur[1] - 1.0) < 1e-3;
-        if (getTagString(dict, "0028|0030").empty() && placeholder) {
+        // GDCM ignores PixelSpacing on projection images (CR/DX/MG/PX),
+        // preferring ImagerPixelSpacing — so a placeholder 1.0 can
+        // appear even when (0028,0030) exists. Recover from the tag
+        // list whenever the spacing is placeholder, not only when the
+        // tag is absent.
+        if (placeholder) {
             double sx = 0, sy = 0;
             if (readPixelSpacing(dict, sx, sy)) {
                 auto sp = image->GetSpacing();
@@ -775,14 +778,12 @@ VolumePtr DicomLoader::loadSeriesStreaming(const SeriesMeta& series,
                            ? int(io->GetDimensions(2)) : 1;
         hdrSx[i]   = io->GetSpacing(0);
         hdrSy[i]   = io->GetSpacing(1);
-        // PixelSpacing (0028,0030) is absent on many DX/CR/MG/dental
-        // exports — physical spacing then lives in ImagerPixelSpacing
-        // (0018,1164) or NominalScannedPixelSpacing (0018,2010), and
-        // GDCM reports a placeholder 1.0. Only treat 1.0 as a placeholder:
-        // enhanced objects carry spacing in functional-group sequences,
-        // which GDCM reads without surfacing the tag.
-        if (getTagString(d, "0028|0030").empty() &&
-            std::abs(hdrSx[i] - 1.0) < 1e-3 &&
+        // GDCM ignores PixelSpacing on projection images (CR/DX/MG/PX)
+        // — it prefers ImagerPixelSpacing and reports 1.0 when that is
+        // absent, even when (0028,0030) exists. Only treat 1.0 as a
+        // placeholder (enhanced objects carry real spacing in
+        // functional-group sequences); recover from the tag list.
+        if (std::abs(hdrSx[i] - 1.0) < 1e-3 &&
             std::abs(hdrSy[i] - 1.0) < 1e-3) {
             double fx = 0, fy = 0;
             if (readPixelSpacing(d, fx, fy)) {
