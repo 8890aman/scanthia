@@ -1195,9 +1195,9 @@ void MainWindow::buildMenus()
     struct SlabOpt { const char* label; int type; double mm; };
     const SlabOpt slabOpts[] = {
         {"Off",           0,  0.0},
-        {"Average 5mm",   1,  5.0},
+        {"Average 3.5mm", 1,  3.5},
         {"Average 10mm",  1, 10.0},
-        {"MIP 5mm",       2,  5.0},
+        {"MIP 3.5mm",     2,  3.5},
         {"MIP 10mm",      2, 10.0},
         {"MIP 20mm",      2, 20.0},
         {"MinIP 10mm",    3, 10.0},
