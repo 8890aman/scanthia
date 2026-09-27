@@ -7,6 +7,8 @@
 #include <vtkImageData.h>
 #include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkPiecewiseFunction.h>
+#include <vtkPlane.h>
+#include <vtkPlaneCollection.h>
 #include <vtkPlaneSource.h>
 #include <vtkPolyDataMapper.h>
 #include <vtkProperty.h>
@@ -68,6 +70,9 @@ void VolumeWidget::setVolume(const VolumePtr& vol)
     m_renderer->AddVolume(m_volumeProp);
 
     applyCtPreset("CT-Soft");
+    for (auto& p : m_cutPlanes)   // old mapper held them; re-add below
+        p = nullptr;
+    updateCutPlanes();
     m_renderer->ResetCamera();
     // Clinical default: anterior view, head up. Patient superior is +Z
     // in index space, anterior is -Y (LPS), so stand the camera in
@@ -160,6 +165,49 @@ void VolumeWidget::setShowPlanes(bool on)
     updatePlaneActors();
 }
 
+void VolumeWidget::setCutMask(unsigned mask)
+{
+    m_cutMask = mask;
+    updateCutPlanes();
+    m_renderWindow->Render();
+}
+
+void VolumeWidget::updateCutPlanes()
+{
+    if (!m_volume || !m_volumeProp)
+        return;
+    auto* mapper = vtkGPUVolumeRayCastMapper::SafeDownCast(
+        m_volumeProp->GetMapper());
+    if (!mapper)
+        return;
+    const auto sp = m_volume->spacing();
+    // A clipping plane keeps the side its normal points into, so to
+    // remove the +axis half the normal faces -axis. Each plane sits on
+    // the crosshair position along its axis.
+    const double sign[2] = {-1.0, 1.0};
+    for (int a = 0; a < 3; ++a) {
+        for (int s = 0; s < 2; ++s) {
+            const unsigned bit = 1u << (2 * a + s);
+            if (!(m_cutMask & bit)) {
+                if (m_cutPlanes[2 * a + s])
+                    mapper->RemoveClippingPlane(m_cutPlanes[2 * a + s]);
+                continue;
+            }
+            auto& plane = m_cutPlanes[2 * a + s];
+            if (!plane) {
+                plane = vtkSmartPointer<vtkPlane>::New();
+                double n[3] = {0.0, 0.0, 0.0};
+                n[a] = sign[s];
+                plane->SetNormal(n);
+                mapper->AddClippingPlane(plane);
+            }
+            double o[3] = {0.0, 0.0, 0.0};
+            o[a] = m_cursor[a] * sp[a];
+            plane->SetOrigin(o);
+        }
+    }
+}
+
 void VolumeWidget::updatePlaneActors()
 {
     if (!m_volume)
@@ -191,6 +239,7 @@ void VolumeWidget::updatePlaneActors()
             colors[axis][0], colors[axis][1], colors[axis][2]);
         m_planeActors[axis]->GetProperty()->SetOpacity(opacity);
     }
+    updateCutPlanes();   // cuts ride on the crosshair
     m_renderWindow->Render();
 }
 

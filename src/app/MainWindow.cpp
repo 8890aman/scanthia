@@ -1212,6 +1212,31 @@ void MainWindow::buildMenus()
         slabGroup->addAction(a);
     }
 
+    // Weasis-style crosshair cuts: clip the 3D volume on one or more
+    // sides of the MPR crosshair. Checkable — combine freely (e.g.
+    // Front+Right+Top cuts a corner octant). Planes follow the
+    // crosshair while scrolling. Bit i = side i in {+X,-X,+Y,-Y,+Z,-Z}.
+    auto* cutMenu = view->addMenu(tr("3D Cut"));
+    const char* cutLabels[6] = {
+        "Cut Left side",  "Cut Right side",   // +/- X (LPS: +X = left)
+        "Cut Back side",  "Cut Front side",   // +/- Y (-Y = anterior)
+        "Cut Top",        "Cut Bottom"};      // +/- Z (+Z = superior)
+    QVector<QAction*> cutActs;
+    for (const char* l : cutLabels) {
+        auto* a = cutMenu->addAction(tr(l));
+        a->setCheckable(true);
+        cutActs.push_back(a);
+    }
+    auto applyCut = [this, cutActs] {
+        unsigned mask = 0;
+        for (int i = 0; i < cutActs.size(); ++i)
+            if (cutActs[i]->isChecked())
+                mask |= (1u << i);
+        m_mpr->volumeView()->setCutMask(mask);
+    };
+    for (auto* a : cutActs)
+        connect(a, &QAction::triggered, this, applyCut);
+
     // Color lookup tables (applied after window/level).
     auto* lutMenu = view->addMenu(tr("Color Map"));
     auto* lutGroup = m_lutGroup = new QActionGroup(this);

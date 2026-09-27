@@ -6,6 +6,7 @@
 #include <QVTKOpenGLNativeWidget.h>
 
 #include <vtkSmartPointer.h>
+#include <vtkPlane.h>
 #include <vtkRenderer.h>
 #include <vtkVolume.h>
 #include <vtkGenericOpenGLRenderWindow.h>
@@ -26,19 +27,27 @@ public:
     void setPreset(const QString& preset);
     void setCursor(const std::array<double,3>& ijk);
     void setShowPlanes(bool on);
+    /// Weasis-style crosshair cuts: clip the volume on the given side
+    /// of the MPR crosshair. Bits 0-5 remove the +X,-X,+Y,-Y,+Z,-Z
+    /// halves respectively; planes track the cursor while scrolling.
+    void setCutMask(unsigned mask);
+    unsigned cutMask() const { return m_cutMask; }
 
 private:
     void applyCtPreset(const QString& preset);
     void updatePlaneActors();
+    void updateCutPlanes();
 
     VolumePtr      m_volume;
     bool           m_showPlanes = true;
+    unsigned       m_cutMask = 0;
     std::array<double,3> m_cursor{0, 0, 0};
 
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer>    m_renderer;
     vtkSmartPointer<vtkVolume>      m_volumeProp;
     vtkSmartPointer<vtkActor>       m_planeActors[3];
+    vtkSmartPointer<vtkPlane>       m_cutPlanes[6];
 };
 
 } // namespace meda
