@@ -319,6 +319,10 @@ bool PacsClient::retrieveStudyMove(const PacsNode& node,
     ProgressSCU scu;
     scu.onProgress = onProgress;
     scu.configure(node);
+    // Large studies can stall >30s between sub-operations while the
+    // PACS packs the next response — give retrieval 5 min of DIMSE
+    // idle room (per-op idle cap, not a total timeout).
+    scu.setDIMSETimeout(300);
     scu.addPresentationContext(
         UID_MOVEPatientRootQueryRetrieveInformationModel, defaultXfers());
     if (!scu.connect(err))
@@ -356,6 +360,7 @@ bool PacsClient::retrieveStudyGet(const PacsNode& node,
     ProgressSCU scu;
     scu.onProgress = onProgress;
     scu.configure(node);
+    scu.setDIMSETimeout(300);   // big studies: don't drop mid-way
     scu.setStorageDir(ofstr(outDir));
     // Without this the default DCMSCU_STORAGE_IGNORE silently drops every
     // C-STORE sub-operation that arrives over the C-GET association.

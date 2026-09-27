@@ -98,6 +98,9 @@ bool StoreScp::start(uint16_t port, const std::string& aet,
     // Non-blocking accept + short timeout so stop() can interrupt listen().
     scp.setConnectionBlockingMode(DUL_NOBLOCK);
     scp.setConnectionTimeout(1);
+    // Long DIMSE idle window: a slow sender mid-study (C-MOVE into
+    // us) can pause >30s without us aborting the association.
+    scp.setDIMSETimeout(300);
     scp.running = &m_impl->running;
     // Forward each stored instance to the GUI thread as fileReceived.
     scp.onStored = [this](const std::string& p) {
