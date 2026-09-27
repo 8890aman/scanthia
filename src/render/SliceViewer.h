@@ -250,7 +250,7 @@ private:
 
     vtkSmartPointer<vtkImageData> m_labelmap;   // overlay being edited
     int    m_editLabel = 1;
-    double m_brushMm = 5.0;
+    double m_brushMm = 3.5;
     // W/L drag state — start window/level captured on mouse down.
     double m_wlStartW = 400.0, m_wlStartC = 40.0;
     std::array<double,3> m_lastPaint{0, 0, 0};

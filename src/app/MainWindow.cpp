@@ -1529,13 +1529,13 @@ void MainWindow::buildToolbar()
             fl->addWidget(cap);
             auto* row = new QHBoxLayout;
             auto* slider = new QSlider(Qt::Horizontal, flyout);
-            slider->setRange(1, 50);
-            slider->setValue(5);
+            slider->setRange(2, 100);       // 0.5mm steps
+            slider->setValue(7);            // 3.5 mm default
             slider->setFixedWidth(140);
-            auto* readout = new QLabel(tr("5 mm"), flyout);
+            auto* readout = new QLabel(tr("3.5 mm"), flyout);
             readout->setStyleSheet("font-family: 'Cascadia Mono',"
                                    " 'Consolas', monospace;");
-            readout->setFixedWidth(44);
+            readout->setFixedWidth(48);
             row->addWidget(slider);
             row->addWidget(readout);
             fl->addLayout(row);
@@ -1546,17 +1546,19 @@ void MainWindow::buildToolbar()
                 p->setFixedHeight(22);
                 p->setToolTip(tr("%1 mm").arg(mm));
                 connect(p, &QPushButton::clicked, this, [&, slider, mm] {
-                    slider->setValue(mm);
+                    slider->setValue(mm * 2);
                 });
                 presetRow->addWidget(p);
             }
             fl->addLayout(presetRow);
             connect(slider, &QSlider::valueChanged, this,
                     [this, readout](int v) {
-                        readout->setText(tr("%1 mm").arg(v));
-                        m_mpr->setBrushRadiusMm(v);
-                        m_singleView->setBrushRadiusMm(v);
-                        m_compareView->setBrushRadiusMm(v);
+                        const double mm = v / 2.0;
+                        readout->setText(
+                            tr("%1 mm").arg(mm, 0, 'f', 1));
+                        m_mpr->setBrushRadiusMm(mm);
+                        m_singleView->setBrushRadiusMm(mm);
+                        m_compareView->setBrushRadiusMm(mm);
                     });
             auto* wa = new QWidgetAction(menu);
             wa->setDefaultWidget(flyout);
