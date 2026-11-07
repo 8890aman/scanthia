@@ -69,6 +69,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
     void wheelEvent(QWheelEvent* e) override;
+    bool event(QEvent* e) override;
     void showEvent(QShowEvent* e) override {
         QVTKOpenGLNativeWidget::showEvent(e);
         setOrientationCube(m_cubeWanted);   // safe once realized

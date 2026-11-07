@@ -249,13 +249,21 @@ void VolumeWidget::setCutMask(unsigned mask)
 void VolumeWidget::setFreeCut(bool on)
 {
     m_freeCut = on;
-    if (!on) {
+    if (on) {
+        // Kill-switch: disable the VTK interactor entirely. Trackball
+        // orbit can't consume ANY input — mouse, wheel, or gestures —
+        // regardless of which delivery path it arrives on. Our own Qt
+        // mouse handlers still record the lasso.
+        if (interactor())
+            interactor()->Disable();
+        QWidget::setCursor(Qt::CrossCursor);
+    } else {
         m_drawing = false;
         m_lasso.clear();
         m_lassoActor->VisibilityOff();
+        if (interactor())
+            interactor()->Enable();
         QWidget::unsetCursor();
-    } else {
-        QWidget::setCursor(Qt::CrossCursor);
     }
     m_renderWindow->Render();
 }
@@ -467,6 +475,21 @@ void VolumeWidget::mouseReleaseEvent(QMouseEvent* e)
     QVTKOpenGLNativeWidget::mouseReleaseEvent(e);
 }
 
+bool VolumeWidget::event(QEvent* e)
+{
+    // Touchpad pinch/pan gestures bypass mousePressEvent entirely —
+    // swallow them too while sculpting.
+    if (m_freeCut &&
+        (e->type() == QEvent::Gesture ||
+         e->type() == QEvent::TouchBegin ||
+         e->type() == QEvent::TouchUpdate ||
+         e->type() == QEvent::TouchEnd)) {
+        e->accept();
+        return true;
+    }
+    return QVTKOpenGLNativeWidget::event(e);
+}
+
 void VolumeWidget::wheelEvent(QWheelEvent* e)
 {
     if (m_freeCut) {          // no zoom while sculpting
@@ -478,7 +501,7 @@ void VolumeWidget::wheelEvent(QWheelEvent* e)
 
 void VolumeWidget::mouseDoubleClickEvent(QMouseEvent* e)
 {
-    if (!m_drawing && e->button() == Qt::LeftButton)
+    if (!m_freeCut && !m_drawing && e->button() == Qt::LeftButton)
         emit doubleClicked();
     e->accept();
 }
