@@ -110,7 +110,6 @@ VolumeWidget::VolumeWidget(QWidget* parent)
     m_orientWidget = vtkSmartPointer<vtkOrientationMarkerWidget>::New();
     m_orientWidget->SetOrientationMarker(cube);
     m_orientWidget->SetViewport(0.0, 0.0, 0.2, 0.2);
-    m_orientWidget->InteractiveOff();
 }
 
 void VolumeWidget::setVolume(const VolumePtr& vol)
@@ -157,6 +156,9 @@ void VolumeWidget::setVolume(const VolumePtr& vol)
     if (m_cropArmed)
         m_boxWidget->PlaceWidget(vol->vtkImage()->GetBounds());
     updatePlaneActors();
+    // The render window is realized by now — arm the orientation
+    // cube if menu-build-time enable was skipped.
+    setOrientationCube(m_cubeWanted);
     m_renderWindow->Render();
 }
 
@@ -361,9 +363,13 @@ void VolumeWidget::resetView()
 
 void VolumeWidget::setOrientationCube(bool on)
 {
+    m_cubeWanted = on;
+    auto* iren = interactor();
+    if (!iren || !m_renderWindow ||
+        !m_renderWindow->GetInitialized())
+        return;   // render window not realized yet — setVolume retries
+    m_orientWidget->SetInteractor(iren);
     m_orientWidget->SetEnabled(on);
-    if (on)
-        m_orientWidget->SetInteractor(interactor());
     m_renderWindow->Render();
 }
 

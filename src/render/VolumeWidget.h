@@ -68,6 +68,10 @@ protected:
     void mouseMoveEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
+    void showEvent(QShowEvent* e) override {
+        QVTKOpenGLNativeWidget::showEvent(e);
+        setOrientationCube(m_cubeWanted);   // safe once realized
+    }
 
 private:
     void applyCtPreset(const QString& preset);
@@ -98,6 +102,7 @@ private:
     vtkSmartPointer<vtkBoxWidget> m_boxWidget;
     vtkSmartPointer<vtkPlane>     m_cropPlanes[6];
     vtkSmartPointer<vtkOrientationMarkerWidget> m_orientWidget;
+    bool                          m_cubeWanted = true;
 
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer>    m_renderer;
