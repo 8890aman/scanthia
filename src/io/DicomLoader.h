@@ -68,6 +68,10 @@ public:
     static vtkSmartPointer<vtkImageData> resampleOntoGrid(
         const VolumePtr& src, const VolumePtr& grid);
 
+    /// Human-readable dump of all tags in `path` (GDCM Print format)
+    /// for the tag-browser dialog. Empty string on read failure.
+    static std::string dumpTags(const std::string& path);
+
 private:
     static SeriesMeta readSeriesHeader(const std::string& firstFile,
                                        const std::string& seriesUID,

@@ -60,6 +60,12 @@ public:
     void resetOblique();
     /// Cine playback in all slice views.
     void setCinePlaying(bool on);
+    void setCineBounce(bool on);
+    void setOverlaysVisible(bool on);
+    /// Per-pane view transforms on the active MPR pane.
+    void rotateActivePane(bool ccw);
+    void toggleActivePaneFlipH();
+    void resetActivePane();
     /// Playback rate for all views.
     void setCineFps(int fps);
     /// Linked zoom/pan across views (default on).

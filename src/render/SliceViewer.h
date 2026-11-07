@@ -115,6 +115,17 @@ public:
     /// Thick-slab MPR: type 0=off (thin), 1=Mean, 2=MIP, 3=MinIP.
     /// Thickness in mm.
     void setSlab(int type, double thicknessMm);
+    /// Display-only view transforms: 90° camera roll, horizontal
+    /// mirror (view from the other side), full camera+W/L reset.
+    void rotatePane(bool ccw);
+    void setPaneFlipH(bool on);
+    bool paneFlipH() const { return m_flipH; }
+    void resetView();
+    /// Ping-pong cine — bounce at the ends instead of looping.
+    void setCineBounce(bool on) { m_cineBounce = on; }
+    /// Show/hide every HUD overlay (corners, ruler, badges, labels) —
+    /// clean-capture mode for screenshots/teaching.
+    void setOverlaysVisible(bool on);
     int    slabType() const { return m_slabType; }
     double slabThickness() const { return m_slabMm; }
 
@@ -187,6 +198,11 @@ private:
     void updateOrientationLabels();
     std::array<double,3> pickPointOnPlane(int displayX, int displayY) const;
     void setupCamera();
+    /// Base view dir/up for the current orientation (pre roll/flip).
+    void baseViewAxes(double dir[3], double up[3]) const;
+    /// Re-place the camera at the current distance/focal with roll +
+    /// flip applied — preserves zoom and pan.
+    void applyViewTransform();
     void updateCrosshairActors();
     void updateCornerText();
     /// Ruler: fixed "nice" length bars (1-2-5 cm/mm)
@@ -221,6 +237,11 @@ private:
     Orientation    m_orientation = Orientation::Axial;
     double         m_obliquePitch = 0.0;  // degrees off orthogonal
     double         m_obliqueYaw   = 0.0;
+    int            m_rollDeg   = 0;      // 90° camera roll steps
+    bool           m_flipH     = false;  // mirrored horizontally
+    bool           m_cineBounce = false;
+    int            m_cineDir   = 1;
+    bool           m_overlaysVisible = true;
     int            m_slice = 0;
     bool           m_showCrosshair = false;
     QString        m_studyText;   // prepended to the TR slice line

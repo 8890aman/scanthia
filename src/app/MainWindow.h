@@ -10,6 +10,8 @@
 
 #include <atomic>
 #include <functional>
+#include <string>
+#include <vector>
 
 class QTreeWidget;
 class QStackedWidget;
@@ -55,7 +57,13 @@ private:
     void buildConfigDock();
     void openFolder();
     void openFiles();
+    /// Shared open-files path (dialog + drag-and-drop).
+    void openFilePaths(const QStringList& files);
     void openCompareSeries();
+    /// DICOM tag dump dialog (RadiAnt F2 equivalent).
+    void showDicomTags();
+    /// Static keyboard/mouse reference dialog.
+    void showShortcutsHelp();
     void openPacs();
     void openAutoPullManager();
     void openBurnMedia();
@@ -172,6 +180,7 @@ private:
     QAction*      m_restoreVolAct = nullptr;
     QAction*      m_reset3dAct = nullptr;
     QMenu*        m_viewMenu = nullptr;
+    std::vector<std::string> m_seriesFiles;  // loaded series, sorted
     QMainWindow*  m_compareWindow = nullptr;
     QHBoxLayout*  m_singleLay = nullptr;
     void popOutCompare(bool on);

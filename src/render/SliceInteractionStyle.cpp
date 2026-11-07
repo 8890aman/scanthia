@@ -61,6 +61,48 @@ void SliceInteractionStyle::OnMouseWheelBackward()
         onSliceScrolled(-1);
 }
 
+void SliceInteractionStyle::beginWindowLevelDrag()
+{
+    // Our own W/L drag: record the press point and let the viewer
+    // capture its start WW/WL; deltas arrive via onWindowLevelDelta.
+    const int* pos = this->Interactor->GetEventPosition();
+    this->FindPokedRenderer(pos[0], pos[1]);
+    if (!this->CurrentRenderer)
+        return;
+    m_wlStartPos[0] = pos[0];
+    m_wlStartPos[1] = pos[1];
+    m_windowLevelling = true;
+    if (onWindowLevelStarted)
+        onWindowLevelStarted();
+    this->GrabFocus(this->EventCallbackCommand);
+}
+
+void SliceInteractionStyle::endWindowLevelDrag()
+{
+    if (m_windowLevelling) {
+        m_windowLevelling = false;
+        if (onWindowLevelEnded)
+            onWindowLevelEnded();
+    }
+    this->ReleaseFocus();
+}
+
+void SliceInteractionStyle::OnMiddleButtonDown()
+{
+    // Middle-drag = W/L from ANY tool — no round-trip back to the
+    // W/L tool just to adjust the window while measuring.
+    if (onActivated)
+        onActivated();
+    m_middleWl = true;
+    beginWindowLevelDrag();
+}
+
+void SliceInteractionStyle::OnMiddleButtonUp()
+{
+    m_middleWl = false;
+    endWindowLevelDrag();
+}
+
 void SliceInteractionStyle::OnLeftButtonDown()
 {
     if (onActivated)
@@ -69,17 +111,7 @@ void SliceInteractionStyle::OnLeftButtonDown()
     const int* pos = this->Interactor->GetEventPosition();
 
     if (m_tool == Tool::WindowLevel) {
-        // Our own W/L drag: record the press point and let the viewer
-        // capture its start WW/WL; deltas arrive via onWindowLevelDelta.
-        this->FindPokedRenderer(pos[0], pos[1]);
-        if (!this->CurrentRenderer)
-            return;
-        m_wlStartPos[0] = pos[0];
-        m_wlStartPos[1] = pos[1];
-        m_windowLevelling = true;
-        if (onWindowLevelStarted)
-            onWindowLevelStarted();
-        this->GrabFocus(this->EventCallbackCommand);
+        beginWindowLevelDrag();
         return;
     }
 
@@ -175,12 +207,7 @@ void SliceInteractionStyle::OnLeftButtonUp()
 {
     m_editing = false;
     if (m_tool == Tool::WindowLevel) {
-        if (m_windowLevelling) {
-            m_windowLevelling = false;
-            if (onWindowLevelEnded)
-                onWindowLevelEnded();
-        }
-        this->ReleaseFocus();
+        endWindowLevelDrag();
         return;
     }
 

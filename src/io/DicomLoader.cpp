@@ -12,6 +12,7 @@
 #include <itkOrientImageFilter.h>
 #include <itkMetaDataDictionary.h>
 #include <itkMetaDataObject.h>
+#include <sstream>
 #include <itkCommand.h>
 #include <itkResampleImageFilter.h>
 #include <itkLinearInterpolateImageFunction.h>
@@ -1174,6 +1175,16 @@ VolumePtr DicomLoader::flipVolume(const VolumePtr& vol, unsigned mask)
     }
 
     return std::make_shared<Volume>(out, v, vol->meta());
+}
+
+std::string DicomLoader::dumpTags(const std::string& path)
+{
+    DcmFileFormat ff;
+    if (ff.loadFile(path.c_str()).bad() || !ff.getDataset())
+        return {};
+    std::ostringstream ss;
+    ff.getDataset()->print(ss);
+    return ss.str();
 }
 
 } // namespace meda

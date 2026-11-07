@@ -206,6 +206,36 @@ void MprWidget::setCinePlaying(bool on)
         v->setCinePlaying(on);
 }
 
+void MprWidget::setCineBounce(bool on)
+{
+    for (auto* v : m_views)
+        v->setCineBounce(on);
+}
+
+void MprWidget::setOverlaysVisible(bool on)
+{
+    for (auto* v : m_views)
+        v->setOverlaysVisible(on);
+}
+
+void MprWidget::rotateActivePane(bool ccw)
+{
+    if (m_activeView)
+        m_activeView->rotatePane(ccw);
+}
+
+void MprWidget::toggleActivePaneFlipH()
+{
+    if (m_activeView)
+        m_activeView->setPaneFlipH(!m_activeView->paneFlipH());
+}
+
+void MprWidget::resetActivePane()
+{
+    if (m_activeView)
+        m_activeView->resetView();
+}
+
 void MprWidget::setWindowLevel(double w, double c)
 {
     for (auto* v : m_views)

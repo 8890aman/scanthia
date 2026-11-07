@@ -8,6 +8,7 @@
 #include <vtkSmartPointer.h>
 #include <vtkActor2D.h>
 #include <vtkBoxWidget.h>
+#include <vtkOrientationMarkerWidget.h>
 #include <vtkPlane.h>
 #include <vtkPolyData.h>
 #include <vtkImageData.h>
@@ -50,6 +51,10 @@ public:
     bool cropArmed() const { return m_cropArmed; }
     /// Preset, cuts, lasso carve, crop and camera back to defaults.
     void resetView();
+    /// Orientation cube + 1-click snaps: 'A','P','L','R','H'(ead),
+    /// 'F'(eet) — sets the camera along that patient axis.
+    void setOrientationCube(bool on);
+    void snapView(char dir);
 
 protected:
     void mousePressEvent(QMouseEvent* e) override;
@@ -83,6 +88,7 @@ private:
     bool                          m_cropArmed = false;
     vtkSmartPointer<vtkBoxWidget> m_boxWidget;
     vtkSmartPointer<vtkPlane>     m_cropPlanes[6];
+    vtkSmartPointer<vtkOrientationMarkerWidget> m_orientWidget;
 
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer>    m_renderer;

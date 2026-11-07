@@ -30,6 +30,9 @@
 #include <QComboBox>
 #include <QPushButton>
 #include <QDialog>
+#include <QFontDatabase>
+#include <QPlainTextEdit>
+#include <QRegularExpression>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QDockWidget>
@@ -387,6 +390,11 @@ MainWindow::MainWindow()
     m_compareView->hide();
     m_compareView->setAcceptDrops(true);
     m_compareView->installEventFilter(this);   // drop target for library drags
+    // Drag & drop: files/folders from Explorer onto the viewer.
+    m_stack->setAcceptDrops(true);
+    m_stack->installEventFilter(this);
+    m_singleView->setAcceptDrops(true);
+    m_singleView->installEventFilter(this);
     m_compareView->setInfoText(
         tr("Drag a series\nfrom the library\nhere to compare"));
     auto* singlePage = new QWidget(this);
@@ -545,6 +553,28 @@ bool MainWindow::eventFilter(QObject* o, QEvent* e)
         de->acceptProposedAction();
         if (!uid.isEmpty())
             loadCompareSeries(uid);
+        return true;
+    }
+    // OS file/folder drop anywhere on the viewer stack.
+    if ((o == m_stack || o == m_singleView) &&
+        (e->type() == QEvent::DragEnter || e->type() == QEvent::Drop)) {
+        auto* de = static_cast<QDropEvent*>(e);
+        if (e->type() == QEvent::DragEnter) {
+            if (de->mimeData()->hasUrls())
+                de->acceptProposedAction();
+            return true;
+        }
+        QStringList files;
+        for (const auto& u : de->mimeData()->urls()) {
+            const QString p = u.toLocalFile();
+            if (QFileInfo(p).isDir())
+                scanAndList(p);
+            else
+                files << p;
+        }
+        if (!files.isEmpty())
+            openFilePaths(files);
+        de->acceptProposedAction();
         return true;
     }
     // Esc on the compare pane closes it.
@@ -1153,6 +1183,26 @@ void MainWindow::buildMenus()
     planes->setCheckable(true);
     planes->setChecked(true);
 
+    // Orientation cube (A/P/L/R/H/F faces) + 1-click view snaps —
+    // medecoro/OHIF orientation menu parity.
+    auto* cube = view->addAction(tr("Orientation Cube"), this,
+                                 [this](bool on) {
+                                     m_mpr->volumeView()
+                                         ->setOrientationCube(on);
+                                 });
+    cube->setCheckable(true);
+    cube->setChecked(true);
+    auto* snap = view->addMenu(tr("3D Snap View"));
+    for (const char* d : {"Anterior", "Posterior", "Left", "Right",
+                          "Head (top)", "Feet (bottom)"}) {
+        const char dir = d[0] == 'F' ? 'F' : d[0] == 'H' ? 'H' : d[0];
+        snap->addAction(tr(d), this,
+                        [this, dir] { m_mpr->volumeView()->snapView(dir); });
+    }
+    m_mpr->volumeView()->setOrientationCube(true);
+    // Enable the cube's interactor once a render window exists.
+    view->addSeparator();
+
     m_segDockAction = view->addAction(
         tr("&AI Results Panel"), this, [this](bool on) {
             if (m_segDock)
@@ -1393,33 +1443,78 @@ void MainWindow::buildMenus()
         tr("&Reset Oblique (O)"), QKeySequence("O"), this,
         [this] { m_mpr->resetOblique(); });
 
+    // Per-pane view transforms + reset — RadiAnt-style pane controls.
+    view->addSeparator();
+    view->addAction(tr("Rotate Pane &90° CW"), this,
+                    [this] { m_mpr->rotateActivePane(false);
+                             m_singleView->rotatePane(false);
+                             m_compareView->rotatePane(false); });
+    view->addAction(tr("Rotate Pane 90° CC&W"), this,
+                    [this] { m_mpr->rotateActivePane(true);
+                             m_singleView->rotatePane(true);
+                             m_compareView->rotatePane(true); });
+    view->addAction(tr("Flip Pane &Horizontal"), this,
+                    [this] { m_mpr->toggleActivePaneFlipH();
+                             m_singleView->setPaneFlipH(
+                                 !m_singleView->paneFlipH());
+                             m_compareView->setPaneFlipH(
+                                 !m_compareView->paneFlipH()); });
+    view->addAction(tr("Flip Pane Vertical"), this, [this] {
+        // V flip = H mirror + 180° roll — self-inverse combo.
+        m_mpr->toggleActivePaneFlipH();
+        m_mpr->rotateActivePane(true);
+        m_mpr->rotateActivePane(true);
+        for (auto* v : {m_singleView, m_compareView}) {
+            v->setPaneFlipH(!v->paneFlipH());
+            v->rotatePane(true);
+            v->rotatePane(true);
+        }
+    });
+    view->addAction(tr("&Reset Pane View (0)"), QKeySequence("0"), this,
+                    [this] { m_mpr->resetActivePane();
+                             m_singleView->resetView();
+                             m_compareView->resetView(); });
+    auto* overlays = view->addAction(tr("Overlays &Visible"), this,
+        [this](bool on) {
+            m_mpr->setOverlaysVisible(on);
+            m_singleView->setOverlaysVisible(on);
+            m_compareView->setOverlaysVisible(on);
+        });
+    overlays->setCheckable(true);
+    overlays->setChecked(true);
+    overlays->setShortcut(Qt::Key_Tab);
+
     auto* tools = menuBar()->addMenu(tr("&Tools"));
     m_toolGroup = new QActionGroup(this);
     m_toolGroup->setExclusive(false); // we manage check state ourselves
-    auto addTool = [&](const QString& label, Tool t, bool checked) {
+    auto addTool = [&](const QString& label, Tool t, bool checked,
+                       const QKeySequence& sc = {}) {
         auto* a = tools->addAction(label, this, [this, t] {
             // Re-clicking the active tool toggles it off (back to W/L).
             setTool(m_activeTool == t ? Tool::WindowLevel : t);
         });
         a->setCheckable(true);
         a->setChecked(checked);
+        if (!sc.isEmpty())
+            a->setShortcut(sc);
         m_toolGroup->addAction(a);
         return a;
     };
-    addTool(tr("Window / Level"), Tool::WindowLevel, true);
-    addTool(tr("Crosshair"), Tool::Crosshair, false);
-    addTool(tr("Measure"), Tool::Measure, false);
-    addTool(tr("ROI Stats"), Tool::Roi, false);
-    addTool(tr("Angle"), Tool::Angle, false);
-    addTool(tr("Pan"), Tool::Pan, false);
-    addTool(tr("Zoom"), Tool::Zoom, false);
+    addTool(tr("Window / Level"), Tool::WindowLevel, true, Qt::Key_W);
+    addTool(tr("Crosshair"), Tool::Crosshair, false, Qt::Key_C);
+    addTool(tr("Measure"), Tool::Measure, false, Qt::Key_M);
+    addTool(tr("ROI Stats"), Tool::Roi, false, Qt::Key_R);
+    addTool(tr("Angle"), Tool::Angle, false, Qt::Key_A);
+    addTool(tr("Pan"), Tool::Pan, false, Qt::Key_H);
+    addTool(tr("Zoom"), Tool::Zoom, false, Qt::Key_X);
     tools->addSeparator();
-    addTool(tr("Seg Brush"), Tool::Brush, false);
-    addTool(tr("Seg Eraser"), Tool::Eraser, false);
+    addTool(tr("Seg Brush"), Tool::Brush, false, Qt::Key_B);
+    addTool(tr("Seg Eraser"), Tool::Eraser, false, Qt::Key_E);
     tools->addSeparator();
     m_cineAction = tools->addAction(tr("Cine"), this, [this](bool on) {
         m_mpr->setCinePlaying(on);
         m_singleView->setCinePlaying(on);
+        m_compareView->setCinePlaying(on);
     });
     m_cineAction->setCheckable(true);
     m_cineAction->setShortcut(Qt::Key_Space);
@@ -1437,6 +1532,13 @@ void MainWindow::buildMenus()
                      [this] { setCineFps(std::min(60, m_cineFps + 5)); });
     tools->addAction(tr("Cine &Slower  ["), Qt::Key_BracketLeft, this,
                      [this] { setCineFps(std::max(2, m_cineFps - 5)); });
+    auto* bounce = tools->addAction(tr("Cine &Ping-Pong"), this,
+                                    [this](bool on) {
+                                        m_mpr->setCineBounce(on);
+                                        m_singleView->setCineBounce(on);
+                                        m_compareView->setCineBounce(on);
+                                    });
+    bounce->setCheckable(true);
 
     auto* smooth = tools->addAction(tr("&Sharpen (edge enhance)"), this,
                                     [this](bool on) {
@@ -1554,6 +1656,21 @@ void MainWindow::buildMenus()
         QMessageBox::information(this, tr("AI Plugins"),
                                  lines.isEmpty() ? tr("No plugins found.")
                                                  : lines.join("\n"));
+    });
+
+    // Per-slice DICOM tag dump (RadiAnt F2 equivalent).
+    tools->addAction(tr("DICOM Tags (F2)"), QKeySequence("F2"), this,
+                     &MainWindow::showDicomTags);
+
+    auto* help = menuBar()->addMenu(tr("&Help"));
+    help->addAction(tr("&Keyboard && Mouse..."), QKeySequence("F1"), this,
+                    &MainWindow::showShortcutsHelp);
+    help->addAction(tr("&About Scanthia"), this, [this] {
+        QMessageBox::about(this, tr("About Scanthia"),
+            tr("Scanthia — open-source DICOM viewer\n"
+               "Qt6 / VTK / ITK / DCMTK\n"
+               "Research & engineering tool — not a certified\n"
+               "medical device."));
     });
 
     // Apply user-customized shortcuts (QSettings "shortcuts/<objectName>").
@@ -1784,6 +1901,86 @@ void MainWindow::buildToolbar()
     tb->addWidget(viewBtn);
 }
 
+void MainWindow::showDicomTags()
+{
+    if (m_seriesFiles.empty()) {
+        m_statusLabel->setText(tr("No series loaded"));
+        return;
+    }
+    auto* dlg = new QDialog(this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->setWindowTitle(tr("DICOM Tags"));
+    dlg->resize(780, 620);
+    auto* lay = new QVBoxLayout(dlg);
+    auto* top = new QHBoxLayout;
+    auto* sliceBox = new QComboBox(dlg);
+    for (int i = 0; i < int(m_seriesFiles.size()); ++i)
+        sliceBox->addItem(tr("Slice %1 — %2").arg(i + 1).arg(
+            QFileInfo(QString::fromStdString(m_seriesFiles[i]))
+                .fileName()));
+    auto* filter = new QLineEdit(dlg);
+    filter->setPlaceholderText(tr("Filter (tag, name or value)..."));
+    top->addWidget(sliceBox, 1);
+    top->addWidget(filter, 1);
+    lay->addLayout(top);
+    auto* text = new QPlainTextEdit(dlg);
+    text->setReadOnly(true);
+    text->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    lay->addWidget(text);
+    auto* full = new QString;
+    auto* apply = new std::function<void()>;
+    *apply = [text, filter, full] {
+        const QString f = filter->text();
+        if (f.isEmpty()) {
+            text->setPlainText(*full);
+            return;
+        }
+        const QRegularExpression re(
+            f, QRegularExpression::CaseInsensitiveOption);
+        QStringList keep;
+        for (const auto& line : full->split('\n'))
+            if (re.match(line).hasMatch())
+                keep << line;
+        text->setPlainText(keep.join('\n'));
+    };
+    auto reload = [this, sliceBox, full, apply] {
+        const int i = sliceBox->currentIndex();
+        if (i < 0 || i >= int(m_seriesFiles.size()))
+            return;
+        *full = QString::fromStdString(
+            DicomLoader::dumpTags(m_seriesFiles[i]));
+        if (full->isEmpty())
+            *full = tr("(could not read file)");
+        (*apply)();
+    };
+    connect(sliceBox, qOverload<int>(&QComboBox::activated), dlg, reload);
+    connect(filter, &QLineEdit::textChanged, dlg, [apply] { (*apply)(); });
+    // Captured heap lives only as long as the dialog.
+    connect(dlg, &QDialog::destroyed, dlg,
+            [full, apply] { delete apply; delete full; });
+    reload();
+    dlg->show();
+}
+
+void MainWindow::showShortcutsHelp()
+{
+    QMessageBox::information(this, tr("Keyboard & Mouse"), tr(
+        "SLICES        wheel / ↑↓ (±1) / PgUp PgDn (±10) / Home End\n"
+        "CINE          Space play · [ ] speed · ping-pong in Tools\n"
+        "W/L           left-drag in W/L tool, middle-drag in ANY tool\n"
+        "ZOOM          Zoom tool, or hold Z + wheel, or pinch\n"
+        "PAN           right-drag, or Pan tool (H)\n"
+        "TOOLS         W wl · C crosshair · M measure · R roi ·\n"
+        "              A angle · H pan · X zoom · B brush · E eraser\n"
+        "VIEW          I invert · D sharpen · 0 reset pane ·\n"
+        "              Tab hide overlays · Alt+C crosshair lines\n"
+        "OBLIQUE       Alt+arrows rotate plane · O reset\n"
+        "3D            left orbit · wheel zoom · right-drag zoom\n"
+        "              Esc deselects cut/annotations · Del last anno\n"
+        "OTHER         F2 tags · F5 refresh library ·\n"
+        "              Ctrl+U clear fusion · Ctrl+P print"));
+}
+
 void MainWindow::openFolder()
 {
     const QString dir = QFileDialog::getExistingDirectory(
@@ -1796,8 +1993,12 @@ void MainWindow::openFiles()
 {
     const auto files = QFileDialog::getOpenFileNames(
         this, tr("Open DICOM Files"), {}, tr("DICOM Files (*.dcm);;All (*)"));
-    if (files.isEmpty())
-        return;
+    if (!files.isEmpty())
+        openFilePaths(files);
+}
+
+void MainWindow::openFilePaths(const QStringList& files)
+{
     // Index each parent directory so opened files land in the
     // library DB — plain loadFiles() only displays, it never stores.
     QStringList dirs;
@@ -2160,6 +2361,7 @@ void MainWindow::loadSeries(const SeriesMeta& meta)
     SeriesMeta sorted = meta;
     DicomLoader::sortFiles(sorted.files,
                            static_cast<DicomLoader::SliceSort>(m_sliceSort));
+    m_seriesFiles = sorted.files;   // for the tag browser (F2)
     m_statusLabel->setText(tr("Loading %1...").arg(meta.seriesDescription.c_str()));
     m_progress->setVisible(true);
     m_progress->setRange(0, 100);

@@ -12,8 +12,8 @@
 namespace meda {
 
 /// Interactor style for 2D slice viewing. The left button performs the
-/// action of the active tool; middle and right always pan, and the wheel
-/// always scrolls slices.
+/// action of the active tool; middle-drag always window/levels, right
+/// pans, and the wheel always scrolls slices.
 class SliceInteractionStyle : public vtkInteractorStyleImage {
 public:
     static SliceInteractionStyle* New();
@@ -66,13 +66,19 @@ public:
     void OnLeftButtonUp() override;
     void OnRightButtonDown() override;
     void OnRightButtonUp() override;
+    void OnMiddleButtonDown() override;
+    void OnMiddleButtonUp() override;
 
 private:
+    void beginWindowLevelDrag();
+    void endWindowLevelDrag();
+
     Tool m_tool = Tool::WindowLevel;
     bool m_measuring = false;
     bool m_editing = false;   // dragging an existing anno handle
     bool m_painting = false;
     bool m_windowLevelling = false;
+    bool m_middleWl = false;  // middle-button W/L (works in any tool)
     int  m_wlStartPos[2] = {0, 0};
     int  m_rightPressPos[2] = {0, 0};
     std::array<double,3> m_measureStart{};

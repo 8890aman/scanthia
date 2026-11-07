@@ -389,8 +389,18 @@ SliceViewer::SliceViewer(QWidget* parent)
     // custom interactor style is mid-drag (W/L, pan, etc).
 
     connect(&m_cineTimer, &QTimer::timeout, this, [this] {
-        if (sliceCount() > 0)
-            setSlice((m_slice + 1) % sliceCount());
+        const int n = sliceCount();
+        if (n <= 0)
+            return;
+        if (m_cineBounce) {
+            // Ping-pong sweep: flip direction at the ends.
+            int s = m_slice + m_cineDir;
+            if (s >= n - 1 || s <= 0)
+                m_cineDir = -m_cineDir;
+            setSlice(std::clamp(s, 0, n - 1));
+        } else {
+            setSlice((m_slice + 1) % n);
+        }
     });
 
     // Smooth scroll: ease the slice plane toward the target index.
@@ -404,7 +414,9 @@ SliceViewer::SliceViewer(QWidget* parent)
         const int    a = axisOf(m_orientation);
         const double target = m_slice * sp[a];
         const double diff = target - m_planePos;
-        if (std::abs(diff) < 0.05 * sp[a]) {
+        // Snap when the eased plane falls far behind — during a fast
+        // wheel burst the image otherwise visibly trails the counter.
+        if (std::abs(diff) < 0.05 * sp[a] || std::abs(diff) > 8 * sp[a]) {
             m_planePos = target;
             m_scrollAnim.stop();
         } else {
@@ -705,16 +717,13 @@ void SliceViewer::obliqueAngles(double& pitchDeg, double& yawDeg) const
     yawDeg   = m_obliqueYaw;
 }
 
-void SliceViewer::setupCamera()
+void SliceViewer::baseViewAxes(double dir[3], double up[3]) const
 {
-    if (!m_volume)
-        return;
     // Radiology display conventions (LPS volume space):
     //   Axial    — viewed from feet: +X on screen right, anterior (-Y) up
     //   Sagittal — viewed from patient left: posterior (+Y) on screen
     //              right, superior (+Z) up
     //   Coronal  — viewed from front: +X on screen right, +Z up
-    double dir[3], up[3];
     switch (m_orientation) {
     case Orientation::Axial:    dir[0]=0;  dir[1]=0; dir[2]=1;
                                 up[0]=0;   up[1]=-1; up[2]=0;   break;
@@ -723,6 +732,84 @@ void SliceViewer::setupCamera()
     case Orientation::Coronal:  dir[0]=0;  dir[1]=1; dir[2]=0;
                                 up[0]=0;   up[1]=0;  up[2]=1;   break;
     }
+    if (m_flipH)   // view the plane from the other side → H mirror
+        for (int i = 0; i < 3; ++i)
+            dir[i] = -dir[i];
+}
+
+void SliceViewer::applyViewTransform()
+{
+    auto* cam = m_renderer->GetActiveCamera();
+    if (!cam || !m_volume)
+        return;
+    double dir[3], up[3];
+    baseViewAxes(dir, up);
+    // Roll the view-up around the view axis by m_rollDeg.
+    const double rad = qDegreesToRadians(double(m_rollDeg));
+    const double c = std::cos(rad), s = std::sin(rad);
+    const double dot = up[0]*dir[0] + up[1]*dir[1] + up[2]*dir[2];
+    double r[3];
+    r[0] = up[0]*c + (dir[1]*up[2] - dir[2]*up[1])*s + dir[0]*dot*(1-c);
+    r[1] = up[1]*c + (dir[2]*up[0] - dir[0]*up[2])*s + dir[1]*dot*(1-c);
+    r[2] = up[2]*c + (dir[0]*up[1] - dir[1]*up[0])*s + dir[2]*dot*(1-c);
+    // Keep the current focal point and distance — zoom/pan preserved.
+    const double* fp = cam->GetFocalPoint();
+    const double* pp = cam->GetPosition();
+    const double dist = std::sqrt((pp[0]-fp[0])*(pp[0]-fp[0])
+                                + (pp[1]-fp[1])*(pp[1]-fp[1])
+                                + (pp[2]-fp[2])*(pp[2]-fp[2]));
+    cam->SetPosition(fp[0] - dir[0]*dist,
+                     fp[1] - dir[1]*dist,
+                     fp[2] - dir[2]*dist);
+    cam->SetViewUp(r);
+    m_renderWindow->Render();
+}
+
+void SliceViewer::rotatePane(bool ccw)
+{
+    m_rollDeg = (m_rollDeg + (ccw ? 90 : -90) + 360) % 360;
+    applyViewTransform();
+}
+
+void SliceViewer::setPaneFlipH(bool on)
+{
+    m_flipH = on;
+    applyViewTransform();
+}
+
+void SliceViewer::resetView()
+{
+    m_rollDeg = 0;
+    m_flipH = false;
+    m_obliquePitch = m_obliqueYaw = 0.0;
+    setOrientation(m_orientation);   // rebuilds plane normal + camera
+    autoWindowLevel();
+    m_renderWindow->Render();
+}
+
+void SliceViewer::setOverlaysVisible(bool on)
+{
+    m_overlaysVisible = on;
+    for (auto& t : m_hud)      t->SetVisibility(on);
+    for (auto& t : m_dirLabel) t->SetVisibility(on);
+    m_rulerDark->SetVisibility(on);
+    m_rulerLight->SetVisibility(on);
+    m_rulerLabelH->SetVisibility(on);
+    m_rulerLabelV->SetVisibility(on);
+    m_flipBadge->SetVisibility(on);
+    m_downsampleBadge->SetVisibility(on);
+    m_fusionBadge->SetVisibility(on);
+    m_fusionBar->SetVisibility(on && m_fusionActor
+                                    && m_fusionActor->GetVisibility());
+    m_renderWindow->Render();
+}
+
+void SliceViewer::setupCamera()
+{
+    if (!m_volume)
+        return;
+    double dir[3], up[3];
+    baseViewAxes(dir, up);
 
     const double* b = m_volume->vtkImage()->GetBounds();
     const double center[3] = {(b[0] + b[1]) / 2, (b[2] + b[3]) / 2,
@@ -749,6 +836,8 @@ void SliceViewer::setupCamera()
     cam->SetViewUp(up);
     cam->SetParallelScale(fitSpan);
     m_renderer->ResetCameraClippingRange();
+    if (m_rollDeg)
+        applyViewTransform();   // reapply the 90° roll on the new camera
     updateCrosshairActors();
     updateOrientationLabels();
     updateScaleRuler();
@@ -806,6 +895,20 @@ void SliceViewer::keyPressEvent(QKeyEvent* e)
         case Qt::Key_Right: setObliqueAngles(m_obliquePitch, m_obliqueYaw + step); return;
         case Qt::Key_Up:    setObliqueAngles(m_obliquePitch + step, m_obliqueYaw); return;
         case Qt::Key_Down:  setObliqueAngles(m_obliquePitch - step, m_obliqueYaw); return;
+        default: break;
+        }
+    }
+    // Keyboard slice navigation + view reset — the most-used keys in
+    // every viewer (RadiAnt/Horos conventions).
+    if (e->modifiers() == Qt::NoModifier && m_volume) {
+        switch (e->key()) {
+        case Qt::Key_Up:       setSlice(m_slice + 1);  return;
+        case Qt::Key_Down:     setSlice(m_slice - 1);  return;
+        case Qt::Key_PageUp:   setSlice(m_slice + 10); return;
+        case Qt::Key_PageDown: setSlice(m_slice - 10); return;
+        case Qt::Key_Home:     setSlice(0);            return;
+        case Qt::Key_End:      setSlice(sliceCount() - 1); return;
+        case Qt::Key_0:        resetView();            return;
         default: break;
         }
     }

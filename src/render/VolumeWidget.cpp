@@ -6,10 +6,12 @@
 #include <vtkCellArray.h>
 #include <vtkColorTransferFunction.h>
 #include <vtkCoordinate.h>
+#include <vtkAnnotatedCubeActor.h>
 #include <vtkGPUVolumeRayCastMapper.h>
 #include <vtkImageData.h>
 #include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkMatrix4x4.h>
+#include <vtkOrientationMarkerWidget.h>
 #include <vtkPiecewiseFunction.h>
 #include <vtkPlane.h>
 #include <vtkPointData.h>
@@ -77,6 +79,21 @@ VolumeWidget::VolumeWidget(QWidget* parent)
         static_cast<VolumeWidget*>(cd)->applyCropBox();
     });
     m_boxWidget->AddObserver(vtkCommand::InteractionEvent, cb);
+
+    // Orientation cube — LPS patient axes labelled like medecoro's
+    // orientation menu (A/P/L/R/H/F snaps are snapView()).
+    auto cube = vtkSmartPointer<vtkAnnotatedCubeActor>::New();
+    cube->SetXPlusFaceText("L");
+    cube->SetXMinusFaceText("R");
+    cube->SetYPlusFaceText("P");
+    cube->SetYMinusFaceText("A");
+    cube->SetZPlusFaceText("H");
+    cube->SetZMinusFaceText("F");
+    cube->SetFaceTextScale(0.6);
+    m_orientWidget = vtkSmartPointer<vtkOrientationMarkerWidget>::New();
+    m_orientWidget->SetOrientationMarker(cube);
+    m_orientWidget->SetViewport(0.0, 0.0, 0.2, 0.2);
+    m_orientWidget->InteractiveOff();
 }
 
 void VolumeWidget::setVolume(const VolumePtr& vol)
@@ -320,6 +337,44 @@ void VolumeWidget::resetView()
     applyCtPreset("CT-Soft");
     if (m_volumeProp)
         resetCameraAnterior();
+    m_renderWindow->Render();
+}
+
+void VolumeWidget::setOrientationCube(bool on)
+{
+    m_orientWidget->SetEnabled(on);
+    if (on)
+        m_orientWidget->SetInteractor(interactor());
+    m_renderWindow->Render();
+}
+
+void VolumeWidget::snapView(char dir)
+{
+    if (!m_volumeProp)
+        return;
+    auto* cam = m_renderer->GetActiveCamera();
+    if (!cam)
+        return;
+    const double* c = m_volumeProp->GetCenter();
+    const double dist = cam->GetDistance();
+    // Patient axes in index space: +X=L, +Y=P, +Z=H (LPS canonical).
+    double pos[3], up[3] = {0, 0, 1};
+    switch (dir) {
+    case 'A': pos[0] = c[0]; pos[1] = c[1] - dist; pos[2] = c[2]; break;
+    case 'P': pos[0] = c[0]; pos[1] = c[1] + dist; pos[2] = c[2]; break;
+    case 'L': pos[0] = c[0] + dist; pos[1] = c[1]; pos[2] = c[2];
+              up[0] = 0; up[1] = 0; up[2] = 1; break;
+    case 'R': pos[0] = c[0] - dist; pos[1] = c[1]; pos[2] = c[2];
+              up[0] = 0; up[1] = 0; up[2] = 1; break;
+    case 'H': pos[0] = c[0]; pos[1] = c[1]; pos[2] = c[2] + dist;
+              up[0] = 0; up[1] = -1; up[2] = 0; break;
+    case 'F': pos[0] = c[0]; pos[1] = c[1]; pos[2] = c[2] - dist;
+              up[0] = 0; up[1] = 1; up[2] = 0; break;
+    default: return;
+    }
+    cam->SetPosition(pos);
+    cam->SetFocalPoint(c[0], c[1], c[2]);
+    cam->SetViewUp(up);
     m_renderWindow->Render();
 }
 
