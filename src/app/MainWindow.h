@@ -21,6 +21,7 @@ class QDockWidget;
 class QHBoxLayout;
 class QComboBox;
 class QLineEdit;
+class QMenu;
 class QToolButton;
 
 namespace meda {
@@ -170,6 +171,7 @@ private:
     QAction*      m_cropAct = nullptr;
     QAction*      m_restoreVolAct = nullptr;
     QAction*      m_reset3dAct = nullptr;
+    QMenu*        m_viewMenu = nullptr;
     QMainWindow*  m_compareWindow = nullptr;
     QHBoxLayout*  m_singleLay = nullptr;
     void popOutCompare(bool on);

@@ -1116,6 +1116,7 @@ void MainWindow::buildMenus()
     file->addAction(tr("E&xit"), QKeySequence::Quit, this, &QWidget::close);
 
     auto* view = menuBar()->addMenu(tr("&View"));
+    m_viewMenu = view;   // also popped up by the toolbar View button
     view->addAction(tr("&Single View"), this, [this] { setLayout(0); });
     view->addAction(tr("&MPR + 3D"), this, [this] { setLayout(1); });
     m_compareAction = view->addAction(
@@ -1769,6 +1770,18 @@ void MainWindow::buildToolbar()
                     m_lutGroup->actions().at(i)->setChecked(true);
             });
     tb->addWidget(lutCombo);
+
+    // "View" dropdown — the entire View menu (layouts, window presets,
+    // crosshair, link, detach, slice order, fusion controls) popped up
+    // straight from the toolbar. Shares the same QMenu object, so it
+    // stays in sync automatically.
+    tb->addSeparator();
+    auto* viewBtn = new QToolButton(tb);
+    viewBtn->setText(tr("View"));
+    viewBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    viewBtn->setPopupMode(QToolButton::InstantPopup);
+    viewBtn->setMenu(m_viewMenu);
+    tb->addWidget(viewBtn);
 }
 
 void MainWindow::openFolder()
