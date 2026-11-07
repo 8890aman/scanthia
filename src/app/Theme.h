@@ -208,6 +208,61 @@ inline void applyTheme(QApplication& app)
             selection-background-color: %3;
         }
 
+        /* Flyout chevrons on menu-button tool buttons */
+        QToolButton::menu-indicator {
+            subcontrol-origin: padding;
+            subcontrol-position: right center;
+            right: 3px;
+        }
+        QToolButton::menu-button { border: none; width: 12px; }
+
+        /* Menu checkmarks — a crisp nav tick on checkable items */
+        QMenu::indicator:checked { background: %6; border-radius: 2px; }
+        QMenu::indicator:unchecked {
+            background: transparent; border: 1px solid %3;
+            border-radius: 2px;
+        }
+
+        /* Combo drop-down chrome */
+        QComboBox { border-radius: 3px; }
+        QComboBox::drop-down { border: none; width: 18px; }
+        QComboBox::down-arrow {
+            image: none;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 5px solid %7;
+            margin-right: 6px;
+        }
+        QComboBox::down-arrow:hover { border-top-color: %5; }
+
+        /* Sliders — thin groove, amber-ish knob */
+        QSlider::groove:horizontal {
+            height: 4px; background: %3; border-radius: 2px;
+        }
+        QSlider::handle:horizontal {
+            width: 12px; height: 12px; margin: -5px 0;
+            border-radius: 6px; background: %5;
+        }
+        QSlider::handle:horizontal:hover { background: %6; }
+        QSlider::sub-page:horizontal { background: %6; border-radius: 2px; }
+
+        /* Readouts & tables (tag browser, PACS lists, config) */
+        QPlainTextEdit, QTextEdit {
+            background: %2; color: %5;
+            border: 1px solid %3; border-radius: 3px;
+            selection-background-color: %6; selection-color: %1;
+        }
+        QTableWidget {
+            background: %1; color: %5; gridline-color: %3;
+            alternate-background-color: %2; border: none;
+        }
+        QTableWidget::item:selected { background: %3; }
+        QHeaderView::section {
+            background: %1; color: %7; border: none;
+            border-bottom: 1px solid %3; padding: 4px 6px;
+            font-size: 10px; text-transform: uppercase;
+        }
+
         /* Dialogs */
         QMessageBox QLabel { color: %5; }
         QPushButton {

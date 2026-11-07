@@ -1306,6 +1306,9 @@ void MainWindow::buildMenus()
                 : tr("Free Cut off"));
         });
     m_freeCutAct->setCheckable(true);
+    // Lasso auto-disarms after a carve — keep the menu state honest.
+    connect(m_mpr->volumeView(), &VolumeWidget::freeCutDone, this,
+            [this] { m_freeCutAct->setChecked(false); });
     m_cropAct = cutMenu->addAction(tr("3D Crop (box)"), this,
         [this](bool on) {
             m_mpr->volumeView()->setCropBox(on);
@@ -1488,28 +1491,37 @@ void MainWindow::buildMenus()
     m_toolGroup = new QActionGroup(this);
     m_toolGroup->setExclusive(false); // we manage check state ourselves
     auto addTool = [&](const QString& label, Tool t, bool checked,
-                       const QKeySequence& sc = {}) {
+                       const QList<QKeySequence>& scs = {}) {
         auto* a = tools->addAction(label, this, [this, t] {
             // Re-clicking the active tool toggles it off (back to W/L).
             setTool(m_activeTool == t ? Tool::WindowLevel : t);
         });
         a->setCheckable(true);
         a->setChecked(checked);
-        if (!sc.isEmpty())
-            a->setShortcut(sc);
+        if (!scs.isEmpty())
+            a->setShortcuts(scs);   // medecoro-style 1..9 + letters
         m_toolGroup->addAction(a);
         return a;
     };
-    addTool(tr("Window / Level"), Tool::WindowLevel, true, Qt::Key_W);
-    addTool(tr("Crosshair"), Tool::Crosshair, false, Qt::Key_C);
-    addTool(tr("Measure"), Tool::Measure, false, Qt::Key_M);
-    addTool(tr("ROI Stats"), Tool::Roi, false, Qt::Key_R);
-    addTool(tr("Angle"), Tool::Angle, false, Qt::Key_A);
-    addTool(tr("Pan"), Tool::Pan, false, Qt::Key_H);
-    addTool(tr("Zoom"), Tool::Zoom, false, Qt::Key_X);
+    addTool(tr("Window / Level"), Tool::WindowLevel, true,
+            {Qt::Key_1, Qt::Key_W});
+    addTool(tr("Crosshair"), Tool::Crosshair, false,
+            {Qt::Key_2, Qt::Key_C});
+    addTool(tr("Measure"), Tool::Measure, false,
+            {Qt::Key_3, Qt::Key_M});
+    addTool(tr("ROI Stats"), Tool::Roi, false,
+            {Qt::Key_4, Qt::Key_R});
+    addTool(tr("Angle"), Tool::Angle, false,
+            {Qt::Key_5, Qt::Key_A});
+    addTool(tr("Pan"), Tool::Pan, false,
+            {Qt::Key_6, Qt::Key_H});
+    addTool(tr("Zoom"), Tool::Zoom, false,
+            {Qt::Key_7, Qt::Key_X});
     tools->addSeparator();
-    addTool(tr("Seg Brush"), Tool::Brush, false, Qt::Key_B);
-    addTool(tr("Seg Eraser"), Tool::Eraser, false, Qt::Key_E);
+    addTool(tr("Seg Brush"), Tool::Brush, false,
+            {Qt::Key_8, Qt::Key_B});
+    addTool(tr("Seg Eraser"), Tool::Eraser, false,
+            {Qt::Key_9, Qt::Key_E});
     tools->addSeparator();
     m_cineAction = tools->addAction(tr("Cine"), this, [this](bool on) {
         m_mpr->setCinePlaying(on);
@@ -1809,6 +1821,7 @@ void MainWindow::buildToolbar()
     {
         auto* btn = new QToolButton(tb);
         btn->setText(tr("3D Cut"));
+        btn->setToolTip(tr("Clip the 3D render — sides, lasso sculpt, box crop"));
         btn->setIcon(toolIcon("scissors"));
         btn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         btn->setPopupMode(QToolButton::InstantPopup);
@@ -1840,6 +1853,8 @@ void MainWindow::buildToolbar()
     {
         auto* btn = new QToolButton(tb);
         btn->setText(tr("Slab"));
+        btn->setToolTip(tr("Thick-slab MPR — Avg / MIP / MinIP thickness"));
+        btn->setIcon(toolIcon("layers"));
         btn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         btn->setPopupMode(QToolButton::InstantPopup);
         auto* menu = new QMenu(btn);
@@ -1853,6 +1868,8 @@ void MainWindow::buildToolbar()
     {
         auto* btn = new QToolButton(tb);
         btn->setText(tr("3D Preset"));
+        btn->setToolTip(tr("Volume render preset (Soft / Bone / Lung / MIP)"));
+        btn->setIcon(toolIcon("box"));
         btn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         btn->setPopupMode(QToolButton::InstantPopup);
         auto* menu = new QMenu(btn);
@@ -1895,6 +1912,8 @@ void MainWindow::buildToolbar()
     tb->addSeparator();
     auto* viewBtn = new QToolButton(tb);
     viewBtn->setText(tr("View"));
+    viewBtn->setToolTip(tr("All view options — layouts, presets, panes"));
+    viewBtn->setIcon(toolIcon("eye"));
     viewBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     viewBtn->setPopupMode(QToolButton::InstantPopup);
     viewBtn->setMenu(m_viewMenu);
@@ -1970,8 +1989,8 @@ void MainWindow::showShortcutsHelp()
         "W/L           left-drag in W/L tool, middle-drag in ANY tool\n"
         "ZOOM          Zoom tool, or hold Z + wheel, or pinch\n"
         "PAN           right-drag, or Pan tool (H)\n"
-        "TOOLS         W wl · C crosshair · M measure · R roi ·\n"
-        "              A angle · H pan · X zoom · B brush · E eraser\n"
+        "TOOLS         1..9 or W C M R A H X B E (wl·xhair·meas·\n"
+        "              roi·angle·pan·zoom·brush·eraser)\n"
         "VIEW          I invert · D sharpen · 0 reset pane ·\n"
         "              Tab hide overlays · Alt+C crosshair lines\n"
         "OBLIQUE       Alt+arrows rotate plane · O reset\n"

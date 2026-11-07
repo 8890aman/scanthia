@@ -86,6 +86,8 @@ MprWidget::MprWidget(QWidget* parent)
 
     m_volumeView = new VolumeWidget(this);
     m_volumeFrame = frameFor(m_volumeView);
+    connect(m_volumeView, &VolumeWidget::doubleClicked, this,
+            &MprWidget::toggleMaximizeVolume);
 
     grid->addWidget(m_frames[0], 0, 0); // axial
     grid->addWidget(m_frames[1], 0, 1); // sagittal
@@ -110,6 +112,25 @@ void MprWidget::toggleMaximize(SliceViewer* v)
     // Force a resize/re-render pass on the visible view.
     for (auto* vw : m_views)
         vw->update();
+}
+
+void MprWidget::toggleMaximizeVolume()
+{
+    // Double-click on the 3D pane swaps it with the full grid, same
+    // gesture as the slice panes.
+    if (m_volumeMaximized) {
+        m_volumeMaximized = false;
+        for (auto* f : m_frames)
+            f->setVisible(true);
+        m_volumeFrame->setVisible(true);
+    } else {
+        m_volumeMaximized = true;
+        m_maximized = nullptr;
+        for (auto* f : m_frames)
+            f->setVisible(false);
+        m_volumeFrame->setVisible(true);
+    }
+    m_volumeView->update();
 }
 
 void MprWidget::setVolume(const VolumePtr& vol)

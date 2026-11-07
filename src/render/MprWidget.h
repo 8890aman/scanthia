@@ -106,6 +106,7 @@ private:
     void onCrosshairMoved(std::array<double,3> ijk);
     void setActiveView(SliceViewer* v);
     void toggleMaximize(SliceViewer* v);
+    void toggleMaximizeVolume();
     void linkCameras();
     bool eventFilter(QObject* o, QEvent* e) override;
 
@@ -116,6 +117,7 @@ private:
     QFrame*                    m_volumeFrame = nullptr;
     VolumeWidget*              m_volumeView = nullptr;
     SliceViewer*               m_maximized = nullptr;
+    bool                       m_volumeMaximized = false;
     SliceViewer*               m_activeView = nullptr;
     QMainWindow*               m_detached[4]{};   // floating pane windows
     vtkImageData*              m_overlay = nullptr;

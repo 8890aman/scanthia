@@ -67,9 +67,26 @@ VolumeWidget::VolumeWidget(QWidget* parent)
     m_lassoActor->SetMapper(lassoMapper);
     m_lassoActor->GetProperty()->SetColor(1.0, 0.55, 0.1);
     m_lassoActor->GetProperty()->SetLineWidth(2.0);
+    m_lassoActor->GetProperty()->SetLineStipplePattern(0xF0F0);
+    m_lassoActor->GetProperty()->SetLineStippleRepeatFactor(1);
     m_lassoActor->VisibilityOff();
     m_renderer->AddActor2D(
         static_cast<vtkProp*>(m_lassoActor.GetPointer()));
+
+    // Translucent fill inside the lasso so the carve region reads
+    // before release.
+    auto fillMapper = vtkSmartPointer<vtkPolyDataMapper2D>::New();
+    fillMapper->SetInputData(m_lassoPoly);
+    auto fillCoord = vtkSmartPointer<vtkCoordinate>::New();
+    fillCoord->SetCoordinateSystemToDisplay();
+    fillMapper->SetTransformCoordinate(fillCoord);
+    m_lassoFill = vtkSmartPointer<vtkActor2D>::New();
+    m_lassoFill->SetMapper(fillMapper);
+    m_lassoFill->GetProperty()->SetColor(1.0, 0.55, 0.1);
+    m_lassoFill->GetProperty()->SetOpacity(0.12);
+    m_lassoFill->VisibilityOff();
+    m_renderer->AddActor2D(
+        static_cast<vtkProp*>(m_lassoFill.GetPointer()));
 
     // Crop box widget — created off; setCropBox arms it.
     m_boxWidget = vtkSmartPointer<vtkBoxWidget>::New();
@@ -104,6 +121,7 @@ void VolumeWidget::setVolume(const VolumePtr& vol)
     m_lasso.clear();
     m_drawing = false;
     m_lassoActor->VisibilityOff();
+    m_lassoFill->VisibilityOff();
     if (m_volumeProp) {
         m_renderer->RemoveVolume(m_volumeProp);
         m_volumeProp = nullptr;
@@ -248,6 +266,7 @@ void VolumeWidget::setFreeCut(bool on)
         m_drawing = false;
         m_lasso.clear();
         m_lassoActor->VisibilityOff();
+        m_lassoFill->VisibilityOff();
         QWidget::unsetCursor();
     } else {
         QWidget::setCursor(Qt::CrossCursor);
@@ -390,8 +409,17 @@ void VolumeWidget::updateLassoActor()
     }
     m_lassoPoly->SetPoints(pts);
     m_lassoPoly->SetLines(lines);
+    auto polys = vtkSmartPointer<vtkCellArray>::New();
+    if (n >= 3) {
+        polys->InsertNextCell(n);
+        for (int i = 0; i < n; ++i)
+            polys->InsertCellPoint(i);
+    }
+    m_lassoPoly->SetPolys(polys);
     m_lassoPoly->Modified();
-    m_lassoActor->SetVisibility(m_lasso.size() > 1);
+    const int vis = m_lasso.size() > 1;
+    m_lassoActor->SetVisibility(vis);
+    m_lassoFill->SetVisibility(n >= 3 ? 1 : 0);
     m_renderWindow->Render();
 }
 
@@ -431,13 +459,25 @@ void VolumeWidget::mouseReleaseEvent(QMouseEvent* e)
     if (m_drawing && e->button() == Qt::LeftButton) {
         m_drawing = false;
         m_lassoActor->VisibilityOff();
+        m_lassoFill->VisibilityOff();
         if (m_lasso.size() >= 3)
             carveLasso();
         m_lasso.clear();
+        // Back to camera-orbit mode after every cut — one shot, not a
+        // mode you stay in.
+        setFreeCut(false);
+        emit freeCutDone();
         e->accept();
         return;
     }
     QVTKOpenGLNativeWidget::mouseReleaseEvent(e);
+}
+
+void VolumeWidget::mouseDoubleClickEvent(QMouseEvent* e)
+{
+    if (!m_drawing && e->button() == Qt::LeftButton)
+        emit doubleClicked();
+    e->accept();
 }
 
 void VolumeWidget::carveLasso()

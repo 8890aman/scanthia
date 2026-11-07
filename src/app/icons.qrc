@@ -11,6 +11,15 @@
         <file>icons/eraser.svg</file>
         <file>icons/play.svg</file>
         <file>icons/scissors.svg</file>
+        <file>icons/layers.svg</file>
+        <file>icons/box.svg</file>
+        <file>icons/eye.svg</file>
+        <file>icons/crop.svg</file>
+        <file>icons/list.svg</file>
+        <file>icons/grid-2x2.svg</file>
+        <file>icons/monitor.svg</file>
+        <file>icons/camera.svg</file>
+        <file>icons/maximize.svg</file>
         <file>icons/Scanthia.png</file>
     </qresource>
 </RCC>
