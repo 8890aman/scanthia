@@ -39,6 +39,10 @@ void SliceInteractionStyle::OnMouseMove()
         onCursorCheck(pickPoint(pos[0], pos[1]));
     if (m_painting && pickPoint && onPaint)
         onPaint(pickPoint(pos[0], pos[1]), m_tool == Tool::Eraser);
+    // Crosshair follows the drag — click-and-move like medecoro's
+    // crosshair lines.
+    if (m_xhairDrag && pickPoint && onPointPicked)
+        onPointPicked(pickPoint(pos[0], pos[1]));
     // Custom W/L drag — dx right widens the window (less contrast),
     // dy up raises the level (brighter). Handled here, not by VTK's
     // picker-dependent WindowLevel().
@@ -131,8 +135,10 @@ void SliceInteractionStyle::OnLeftButtonDown()
         if (onInteractionBegin) onInteractionBegin();
         break;
     case Tool::Crosshair:
-        if (pickPoint && onPointPicked)
+        if (pickPoint && onPointPicked) {
             onPointPicked(pickPoint(pos[0], pos[1]));
+            m_xhairDrag = true;
+        }
         break;
     case Tool::Measure:
         if (pickPoint) {
@@ -206,6 +212,7 @@ void SliceInteractionStyle::OnLeftButtonDown()
 void SliceInteractionStyle::OnLeftButtonUp()
 {
     m_editing = false;
+    m_xhairDrag = false;
     if (m_tool == Tool::WindowLevel) {
         endWindowLevelDrag();
         return;

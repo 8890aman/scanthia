@@ -483,6 +483,10 @@ void MprWidget::setCursor(const std::array<double,3>& ijk)
     if (!m_volume)
         return;
     m_cursor = ijk;
+    // Batch: each setSlice/setCrosshairIjk can cascade renders (slice
+    // changed → crosshair on siblings). Suspend, apply, flush once.
+    for (auto* v : m_views)
+        v->setRenderSuspended(true);
     const Orientation orients[3] = {
         Orientation::Axial, Orientation::Sagittal, Orientation::Coronal};
     for (int i = 0; i < 3; ++i) {
@@ -491,16 +495,22 @@ void MprWidget::setCursor(const std::array<double,3>& ijk)
             ijk[static_cast<size_t>(axisOf(orients[i]))])));
         v->setCrosshairIjk(ijk);
     }
+    for (auto* v : m_views)
+        v->setRenderSuspended(false);
     m_volumeView->setCursor(ijk);
 }
 
 void MprWidget::onViewSliceChanged(Orientation o, int slice)
 {
     m_cursor[static_cast<size_t>(axisOf(o))] = slice;
+    for (auto* v : m_views)
+        v->setRenderSuspended(true);
     // Moving one plane's slice moves the crosshair lines in the other views.
     for (int i = 0; i < 3; ++i)
         if (static_cast<int>(o) != i)
             m_views[i]->setCrosshairIjk(m_cursor);
+    for (auto* v : m_views)
+        v->setRenderSuspended(false);
     m_volumeView->setCursor(m_cursor);
 }
 

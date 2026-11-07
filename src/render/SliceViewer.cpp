@@ -307,8 +307,15 @@ SliceViewer::SliceViewer(QWidget* parent)
     m_style->onPointPicked = [this](std::array<double,3> p) {
         std::array<double,3> ijk;
         m_volume->worldToIjk(p, ijk);
-        emit crosshairMoved(ijk);
+        // Drag-follow fires per mouse-move — coalesce to ~60 Hz.
+        m_xhairPending = ijk;
+        if (!m_xhairTimer.isActive())
+            m_xhairTimer.start();
     };
+    m_xhairTimer.setSingleShot(true);
+    m_xhairTimer.setInterval(16);
+    connect(&m_xhairTimer, &QTimer::timeout, this,
+            [this] { emit crosshairMoved(m_xhairPending); });
     m_style->onMeasureStart = [this](int kind) { beginAnno(kind); };
     m_style->onMeasureGrab  = [this](std::array<double,3> p) {
         const auto hit = pickAnnoHandle(p);
@@ -429,7 +436,7 @@ SliceViewer::SliceViewer(QWidget* parent)
             m_planePos += diff * 0.30;
         }
         updatePlaneOrigin();
-        m_renderWindow->Render();
+        doRender();
     });
 
     // Paint commits are coalesced — the GPU upload is expensive.
@@ -468,14 +475,14 @@ void SliceViewer::endInteraction()
     m_renderWindow->SetDesiredUpdateRate(0.0);
     if (auto* iren = interactor())
         iren->SetDesiredUpdateRate(0.0001);
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setScaleVisible(bool on)
 {
     m_scaleVisible = on;
     updateScaleRuler();
-    m_renderWindow->Render();
+    doRender();
 }
 
 // Physical ruler: a fixed "nice" physical length (1-2-5 sequence)
@@ -719,7 +726,7 @@ void SliceViewer::setObliqueAngles(double pitchDeg, double yawDeg)
     m_mapper->Modified();
     m_overlayMapper->Modified();
     m_fusionMapper->Modified();
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::obliqueAngles(double& pitchDeg, double& yawDeg) const
@@ -773,7 +780,7 @@ void SliceViewer::applyViewTransform()
                      fp[1] - dir[1]*dist,
                      fp[2] - dir[2]*dist);
     cam->SetViewUp(r);
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::rotatePane(bool ccw)
@@ -795,7 +802,7 @@ void SliceViewer::resetView()
     m_obliquePitch = m_obliqueYaw = 0.0;
     setOrientation(m_orientation);   // rebuilds plane normal + camera
     autoWindowLevel();
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setOverlaysVisible(bool on)
@@ -812,7 +819,7 @@ void SliceViewer::setOverlaysVisible(bool on)
     m_fusionBadge->SetVisibility(on);
     m_fusionBar->SetVisibility(on && m_fusionActor
                                     && m_fusionActor->GetVisibility());
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setupCamera()
@@ -976,7 +983,7 @@ void SliceViewer::zoomBy(double factor)
         return;
     cam->SetParallelScale(cam->GetParallelScale() * factor);
     updateScaleRuler();
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::resizeEvent(QResizeEvent* e)
@@ -1003,7 +1010,7 @@ void SliceViewer::setSlice(int s)
         m_scrollAnim.stop();
         m_planePos = clamped * m_volume->spacing()[axisOf(m_orientation)];
         updatePlaneOrigin();
-        m_renderWindow->Render();
+        doRender();
     } else if (!m_scrollAnim.isActive()) {
         m_scrollAnim.start();
     }
@@ -1013,6 +1020,31 @@ void SliceViewer::setSlice(int s)
     updateAnnotationVisibility();
     if (!same)
         emit sliceChanged(m_slice);
+}
+
+void SliceViewer::doRender()
+{
+    if (m_renderSuspendDepth > 0) {
+        m_renderPending = true;
+        return;
+    }
+    m_renderWindow->Render();
+}
+
+void SliceViewer::setRenderSuspended(bool on)
+{
+    // Depth counter: a setSlice → sliceChanged → crosshair cascade
+    // can nest inside an outer batch — only the outermost exit renders.
+    if (on) {
+        ++m_renderSuspendDepth;
+        return;
+    }
+    if (m_renderSuspendDepth > 0)
+        --m_renderSuspendDepth;
+    if (m_renderSuspendDepth == 0 && m_renderPending) {
+        m_renderPending = false;
+        m_renderWindow->Render();
+    }
 }
 
 void SliceViewer::updatePlaneOrigin()
@@ -1033,7 +1065,7 @@ void SliceViewer::setWindowLevel(double width, double center)
     prop->SetColorWindow(std::max(width, 1e-3));
     prop->SetColorLevel(center);
     updateCornerText();
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::windowLevel(double& width, double& center) const
@@ -1094,7 +1126,7 @@ void SliceViewer::setActiveTool(Tool t)
         }
     }
     m_draftAnno = m_editAnno = -1;
-    m_renderWindow->Render();
+    doRender();
 }
 
 Tool SliceViewer::activeTool() const
@@ -1125,7 +1157,7 @@ void SliceViewer::setShowCrosshair(bool on)
     updateCrosshairActors();
     m_crossLineH->SetVisibility(on ? 1 : 0);
     m_crossLineV->SetVisibility(on ? 1 : 0);
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::clearAnnotations()
@@ -1134,7 +1166,7 @@ void SliceViewer::clearAnnotations()
         removeAnnoActors(an);
     m_annos.clear();
     m_draftAnno = m_editAnno = -1;
-    m_renderWindow->Render();
+    doRender();
     emit annotationsChanged();
 }
 
@@ -1145,7 +1177,7 @@ void SliceViewer::undoAnnotation()
     removeAnnoActors(m_annos.back());
     m_annos.pop_back();
     m_draftAnno = m_editAnno = -1;
-    m_renderWindow->Render();
+    doRender();
     emit annotationsChanged();   // persist the removal
 }
 
@@ -1166,7 +1198,7 @@ void SliceViewer::setCrosshairIjk(const std::array<double,3>& ijk)
 {
     m_crosshairIjk = ijk;
     updateCrosshairActors();
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setOverlay(vtkImageData* labelmap, vtkLookupTable* lut,
@@ -1176,7 +1208,7 @@ void SliceViewer::setOverlay(vtkImageData* labelmap, vtkLookupTable* lut,
     if (!labelmap) {
         m_overlayActor->SetVisibility(0);
         m_overlayMapper->SetInputData(nullptr);
-        m_renderWindow->Render();
+        doRender();
         return;
     }
     auto colors = vtkSmartPointer<vtkImageMapToColors>::New();
@@ -1189,7 +1221,7 @@ void SliceViewer::setOverlay(vtkImageData* labelmap, vtkLookupTable* lut,
     m_overlayLut = lut;
     m_overlayActor->GetProperty()->SetOpacity(opacity);
     m_overlayActor->SetVisibility(1);
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setFusion(vtkImageData* img, vtkLookupTable* lut,
@@ -1202,7 +1234,7 @@ void SliceViewer::setFusion(vtkImageData* img, vtkLookupTable* lut,
         m_fusionActor->SetVisibility(0);
         m_fusionMapper->SetInputData(nullptr);
         m_fusionBar->SetVisibility(0);
-        m_renderWindow->Render();
+        doRender();
         return;
     }
     auto colors = vtkSmartPointer<vtkImageMapToColors>::New();
@@ -1216,14 +1248,14 @@ void SliceViewer::setFusion(vtkImageData* img, vtkLookupTable* lut,
     // Colorbar mirrors the overlay LUT (labels show its value range).
     m_fusionBar->SetLookupTable(lut);
     m_fusionBar->SetVisibility(1);
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setFusionOpacity(double o)
 {
     m_fusionOpacity = o;
     m_fusionActor->GetProperty()->SetOpacity(o);
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setFusionWindow(double lo, double hi)
@@ -1233,7 +1265,7 @@ void SliceViewer::setFusionWindow(double lo, double hi)
     m_fusionLut->SetTableRange(lo, hi);
     m_fusionLut->Modified();          // don't Build() — that would
     m_fusionBar->SetLookupTable(m_fusionLut); // regen HSV ramps
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setFusionColormap(int which)
@@ -1250,38 +1282,38 @@ void SliceViewer::setFusionColormap(int which)
     }
     m_fusionLut->Modified();
     m_fusionBar->SetLookupTable(m_fusionLut);
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setFusionBarTitle(const QString& text)
 {
     m_fusionBar->SetTitle(text.toUtf8().constData());
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setInfoText(const QString& text)
 {
     m_hud[2]->SetInput(text.toUtf8().constData());
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setStudyText(const QString& text)
 {
     m_studyText = text;
     updateCornerText();
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setSeriesText(const QString& text)
 {
     m_hud[1]->SetInput(text.toUtf8().constData());
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setFlipBadge(bool on)
 {
     m_flipBadge->SetVisibility(on);
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setFusionBadge(const QString& name)
@@ -1289,13 +1321,13 @@ void SliceViewer::setFusionBadge(const QString& name)
     m_fusionBadge->SetInput(
         name.isEmpty() ? "" : ("FUSION: " + name).toUtf8().constData());
     m_fusionBadge->SetVisibility(name.isEmpty() ? 0 : 1);
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setDownsampleBadge(bool on)
 {
     m_downsampleBadge->SetVisibility(on);
-    m_renderWindow->Render();
+    doRender();
 }
 
 double SliceViewer::slicePlaneOffset() const
@@ -1309,7 +1341,7 @@ void SliceViewer::setSmoothing(bool on)
     if (m_volume)
         m_mapper->SetInputData(on ? m_volume->sharpenedVtk()
                                   : m_volume->vtkImage());
-    m_renderWindow->Render();
+    doRender();
 }
 
 void SliceViewer::setSlab(int type, double thicknessMm)
@@ -1324,7 +1356,7 @@ void SliceViewer::setSlab(int type, double thicknessMm)
     }
     m_mapper->SetSlabThickness(type == 0 ? 0.0 : thicknessMm);
     updateCornerText();
-    m_renderWindow->Render();
+    doRender();
 }
 
 std::array<double,3> SliceViewer::pickPointOnPlane(int displayX,
@@ -1537,7 +1569,7 @@ void SliceViewer::updateMeasureActors(const std::array<double,3>& a,
     an.p[1] = b;
     an.npts = 2;
     rebuildAnno(an);
-    m_renderWindow->Render();
+    doRender();
     emit annotationsChanged();
 
     const double dx = a[0]-b[0], dy = a[1]-b[1], dz = a[2]-b[2];
@@ -1554,7 +1586,7 @@ void SliceViewer::updateRoiActors(const std::array<double,3>& a,
     an.p[1] = b;
     an.npts = 2;
     rebuildAnno(an);
-    m_renderWindow->Render();
+    doRender();
     emit annotationsChanged();
 }
 
@@ -1576,7 +1608,7 @@ void SliceViewer::updateAngleActors(const std::array<double,3>& a,
     };
     an.npts = eq(a, b) && eq(b, c) ? 1 : (eq(b, c) ? 2 : 3);
     rebuildAnno(an);
-    m_renderWindow->Render();
+    doRender();
     emit annotationsChanged();
 }
 
@@ -1912,7 +1944,7 @@ void SliceViewer::editAnnoPoint(int annoIdx, int ptIdx,
         an.lblOffU = worldPt[u] - an.anchorU;   // auto anchor spot
         an.lblOffV = worldPt[v] - an.anchorV;
         rebuildAnno(an);
-        m_renderWindow->Render();
+        doRender();
         return;
     }
 
@@ -1942,7 +1974,7 @@ void SliceViewer::editAnnoPoint(int annoIdx, int ptIdx,
         an.p[size_t(ptIdx)] = p;
     }
     rebuildAnno(an);
-    m_renderWindow->Render();
+    doRender();
     emit annotationsChanged();
 }
 
@@ -2058,7 +2090,7 @@ void SliceViewer::setColorMap(int which)
     if (which == 0) {
         prop->SetLookupTable(nullptr);
         prop->SetUseLookupTableScalarRange(0);
-        m_renderWindow->Render();
+        doRender();
         return;
     }
     m_colorLut = vtkSmartPointer<vtkLookupTable>::New();
@@ -2068,7 +2100,7 @@ void SliceViewer::setColorMap(int which)
     // LUT input is the normalized post-window/level value.
     prop->SetUseLookupTableScalarRange(0);
     prop->SetLookupTable(m_colorLut);
-    m_renderWindow->Render();
+    doRender();
 }
 
 namespace {
@@ -2190,7 +2222,7 @@ void SliceViewer::commitPaint()
     m_paintDirty = false;
     m_labelmap->GetPointData()->GetScalars()->Modified();
     m_labelmap->Modified();
-    m_renderWindow->Render();
+    doRender();
     emit overlayEdited();
 }
 
@@ -2272,7 +2304,7 @@ void SliceViewer::annotationsFromJson(const QJsonObject& o)
         addAnno(2, g.value("slice").toInt(), a, b, c, 3);
     }
     updateAnnotationVisibility();
-    m_renderWindow->Render();
+    doRender();
 }
 
 } // namespace meda

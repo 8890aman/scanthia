@@ -79,6 +79,7 @@ private:
     bool m_painting = false;
     bool m_windowLevelling = false;
     bool m_middleWl = false;  // middle-button W/L (works in any tool)
+    bool m_xhairDrag = false; // crosshair drag-follow
     int  m_wlStartPos[2] = {0, 0};
     int  m_rightPressPos[2] = {0, 0};
     std::array<double,3> m_measureStart{};

@@ -158,6 +158,9 @@ public:
     vtkRenderer* renderer() const { return m_renderer; }
     /// Force a repaint — used while a volume streams in.
     void refresh() { m_renderWindow->Render(); }
+    /// Batch updates (crosshair jumps etc.) without a render per
+    /// call — re-enable flushes one final render.
+    void setRenderSuspended(bool on);
     /// Z is the zoom modifier (hold + wheel). Public so the app-level
     /// event filter can set it even when another widget has focus.
     void setZoomKeyHeld(bool on) { m_zoomKeyHeld = on; }
@@ -197,6 +200,8 @@ signals:
     void toolDeselectRequested();
 
 private:
+    /// All render requests route here — suspension makes them pending.
+    void doRender();
     void updatePlaneOrigin();
     void updateOrientationLabels();
     std::array<double,3> pickPointOnPlane(int displayX, int displayY) const;
@@ -327,6 +332,11 @@ private:
     QTimer m_cineTimer;
     QTimer m_paintTimer;       // 24 ms paint-commit coalescer
     bool   m_paintDirty = false;
+    int    m_renderSuspendDepth = 0;
+    bool   m_renderPending = false;
+    // Crosshair-drag coalescer — emits the latest ijk at ~60 Hz max.
+    QTimer m_xhairTimer;
+    std::array<double,3> m_xhairPending{0, 0, 0};
     QTimer m_lodIdleTimer;     // fires ~150ms after last interaction → HQ
     bool   m_interacting = false;
 };
