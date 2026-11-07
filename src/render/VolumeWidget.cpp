@@ -1,6 +1,7 @@
 #include "VolumeWidget.h"
 
 #include <vtkActor.h>
+#include <vtkCallbackCommand.h>
 #include <vtkCamera.h>
 #include <vtkCellArray.h>
 #include <vtkColorTransferFunction.h>
@@ -13,6 +14,7 @@
 #include <vtkPlane.h>
 #include <vtkPointData.h>
 #include <vtkPlaneCollection.h>
+#include <vtkPlanes.h>
 #include <vtkPlaneSource.h>
 #include <vtkPoints.h>
 #include <vtkPolyDataMapper.h>
@@ -66,6 +68,15 @@ VolumeWidget::VolumeWidget(QWidget* parent)
     m_lassoActor->VisibilityOff();
     m_renderer->AddActor2D(
         static_cast<vtkProp*>(m_lassoActor.GetPointer()));
+
+    // Crop box widget — created off; setCropBox arms it.
+    m_boxWidget = vtkSmartPointer<vtkBoxWidget>::New();
+    auto cb = vtkSmartPointer<vtkCallbackCommand>::New();
+    cb->SetClientData(this);
+    cb->SetCallback(+[](vtkObject*, unsigned long, void* cd, void*) {
+        static_cast<VolumeWidget*>(cd)->applyCropBox();
+    });
+    m_boxWidget->AddObserver(vtkCommand::InteractionEvent, cb);
 }
 
 void VolumeWidget::setVolume(const VolumePtr& vol)
@@ -102,9 +113,20 @@ void VolumeWidget::setVolume(const VolumePtr& vol)
     m_renderer->AddVolume(m_volumeProp);
 
     applyCtPreset("CT-Soft");
-    for (auto& p : m_cutPlanes)   // old mapper held them; re-add below
+    for (auto& p : m_cutPlanes)    // old mapper held them; re-add below
+        p = nullptr;
+    for (auto& p : m_cropPlanes)
         p = nullptr;
     updateCutPlanes();
+    resetCameraAnterior();
+    if (m_cropArmed)
+        m_boxWidget->PlaceWidget(vol->vtkImage()->GetBounds());
+    updatePlaneActors();
+    m_renderWindow->Render();
+}
+
+void VolumeWidget::resetCameraAnterior()
+{
     m_renderer->ResetCamera();
     // Clinical default: anterior view, head up. Patient superior is +Z
     // in index space, anterior is -Y (LPS), so stand the camera in
@@ -116,8 +138,6 @@ void VolumeWidget::setVolume(const VolumePtr& vol)
         cam->SetPosition(c[0], c[1] - dist, c[2]);
         cam->SetFocalPoint(c[0], c[1], c[2]);
     }
-    updatePlaneActors();
-    m_renderWindow->Render();
 }
 
 void VolumeWidget::setPreset(const QString& preset)
@@ -229,6 +249,78 @@ void VolumeWidget::restoreVolume()
         m_carveImage = nullptr;
         m_renderWindow->Render();
     }
+}
+
+void VolumeWidget::setCropBox(bool on)
+{
+    m_cropArmed = on;
+    if (on && m_volume) {
+        m_boxWidget->SetInteractor(interactor());
+        m_boxWidget->SetProp3D(m_volumeProp);
+        m_boxWidget->PlaceWidget(m_srcImage->GetBounds());
+        m_boxWidget->On();
+        applyCropBox();
+    } else {
+        m_boxWidget->Off();
+        // Remove the six box planes from the mapper.
+        auto* mapper = m_volumeProp
+            ? vtkGPUVolumeRayCastMapper::SafeDownCast(
+                  m_volumeProp->GetMapper())
+            : nullptr;
+        if (mapper)
+            for (auto& p : m_cropPlanes) {
+                if (p)
+                    mapper->RemoveClippingPlane(p);
+                p = nullptr;
+            }
+        else
+            for (auto& p : m_cropPlanes)
+                p = nullptr;
+    }
+    m_renderWindow->Render();
+}
+
+void VolumeWidget::applyCropBox()
+{
+    if (!m_volumeProp)
+        return;
+    auto* mapper = vtkGPUVolumeRayCastMapper::SafeDownCast(
+        m_volumeProp->GetMapper());
+    if (!mapper)
+        return;
+    auto planes = vtkSmartPointer<vtkPlanes>::New();
+    m_boxWidget->GetPlanes(planes);
+    auto* normals = planes->GetNormals();
+    auto* points  = planes->GetPoints();
+    if (!normals || !points)
+        return;
+    // vtkBoxWidget normals point outward; clipping keeps the positive
+    // side, so flip them to keep the box interior.
+    const int n = std::min(6, int(normals->GetNumberOfTuples()));
+    for (int i = 0; i < n; ++i) {
+        auto& p = m_cropPlanes[i];
+        if (!p) {
+            p = vtkSmartPointer<vtkPlane>::New();
+            mapper->AddClippingPlane(p);
+        }
+        const double* nrm = normals->GetTuple3(i);
+        const double* pt  = points->GetPoint(i);
+        p->SetNormal(-nrm[0], -nrm[1], -nrm[2]);
+        p->SetOrigin(pt);
+    }
+    m_renderWindow->Render();
+}
+
+void VolumeWidget::resetView()
+{
+    setFreeCut(false);
+    setCropBox(false);
+    setCutMask(0);
+    restoreVolume();
+    applyCtPreset("CT-Soft");
+    if (m_volumeProp)
+        resetCameraAnterior();
+    m_renderWindow->Render();
 }
 
 void VolumeWidget::updateLassoActor()

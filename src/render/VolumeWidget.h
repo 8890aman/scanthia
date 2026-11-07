@@ -7,6 +7,7 @@
 
 #include <vtkSmartPointer.h>
 #include <vtkActor2D.h>
+#include <vtkBoxWidget.h>
 #include <vtkPlane.h>
 #include <vtkPolyData.h>
 #include <vtkImageData.h>
@@ -43,6 +44,12 @@ public:
     bool freeCutArmed() const { return m_freeCut; }
     /// Discard all carving and show the pristine volume again.
     void restoreVolume();
+    /// medecoro/OHIF crop: vtkBoxWidget around the volume — dragging
+    /// its faces/corners clips the 3D render live (6 oriented planes).
+    void setCropBox(bool on);
+    bool cropArmed() const { return m_cropArmed; }
+    /// Preset, cuts, lasso carve, crop and camera back to defaults.
+    void resetView();
 
 protected:
     void mousePressEvent(QMouseEvent* e) override;
@@ -55,6 +62,8 @@ private:
     void updateCutPlanes();
     void updateLassoActor();
     void carveLasso();
+    void applyCropBox();
+    void resetCameraAnterior();
     std::array<double,2> displayPos(const QPoint& p) const;
 
     VolumePtr      m_volume;
@@ -71,6 +80,9 @@ private:
     vtkSmartPointer<vtkImageData> m_srcImage;
     vtkSmartPointer<vtkActor2D>   m_lassoActor;
     vtkSmartPointer<vtkPolyData>  m_lassoPoly;
+    bool                          m_cropArmed = false;
+    vtkSmartPointer<vtkBoxWidget> m_boxWidget;
+    vtkSmartPointer<vtkPlane>     m_cropPlanes[6];
 
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer>    m_renderer;

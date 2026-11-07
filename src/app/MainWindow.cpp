@@ -1134,10 +1134,17 @@ void MainWindow::buildMenus()
     rebuildPresetsMenu();
     view->addSeparator();
     auto* volPresets = view->addMenu(tr("3D Presets"));
-    for (const char* p : {"CT-Soft", "CT-Bone", "CT-Lung", "MIP"})
-        volPresets->addAction(p, this, [this, p] {
+    auto* presetGroup = new QActionGroup(this);
+    m_presetActs.clear();
+    for (const char* p : {"CT-Soft", "CT-Bone", "CT-Lung", "MIP"}) {
+        auto* pa = volPresets->addAction(p, this, [this, p] {
             m_mpr->volumeView()->setPreset(p);
         });
+        pa->setCheckable(true);
+        pa->setChecked(QString(p) == "CT-Soft");
+        presetGroup->addAction(pa);
+        m_presetActs.push_back(pa);
+    }
     auto* planes = view->addAction(tr("Show MPR Planes"), this,
                                    [this](bool on) {
                                        m_mpr->volumeView()->setShowPlanes(on);
@@ -1203,6 +1210,7 @@ void MainWindow::buildMenus()
         {"MinIP 10mm",    3, 10.0},
         {"MinIP 20mm",    3, 20.0},
     };
+    m_slabActs.clear();
     for (const auto& opt : slabOpts) {
         auto* a = slabMenu->addAction(tr(opt.label), this, [this, opt] {
             m_mpr->setSlab(opt.type, opt.mm);
@@ -1210,6 +1218,7 @@ void MainWindow::buildMenus()
         a->setCheckable(true);
         a->setChecked(opt.type == 0);
         slabGroup->addAction(a);
+        m_slabActs.push_back(a);
     }
 
     // Weasis-style crosshair cuts: clip the 3D volume on one or more
@@ -1246,11 +1255,31 @@ void MainWindow::buildMenus()
                 : tr("Free Cut off"));
         });
     m_freeCutAct->setCheckable(true);
+    m_cropAct = cutMenu->addAction(tr("3D Crop (box)"), this,
+        [this](bool on) {
+            m_mpr->volumeView()->setCropBox(on);
+            m_statusLabel->setText(on
+                ? tr("3D Crop: drag the box handles on the 3D view")
+                : tr("3D Crop off"));
+        });
+    m_cropAct->setCheckable(true);
     m_restoreVolAct = cutMenu->addAction(tr("Restore 3D Volume"), this,
         [this] {
             m_mpr->volumeView()->restoreVolume();
             m_statusLabel->setText(tr("3D volume restored"));
         });
+    m_reset3dAct = cutMenu->addAction(tr("Reset 3D View"), this, [this] {
+        for (auto* a : m_cutActs)
+            a->setChecked(false);
+        if (m_freeCutAct)  m_freeCutAct->setChecked(false);
+        if (m_cropAct)     m_cropAct->setChecked(false);
+        m_mpr->volumeView()->resetView();
+        // Re-check the default preset radio.
+        for (auto* a : m_presetActs)
+            if (a->text() == "CT-Soft")
+                a->setChecked(true);
+        m_statusLabel->setText(tr("3D view reset"));
+    });
 
     // Color lookup tables (applied after window/level).
     auto* lutMenu = view->addMenu(tr("Color Map"));
@@ -1679,8 +1708,38 @@ void MainWindow::buildToolbar()
         menu->addSeparator();
         if (m_freeCutAct)
             menu->addAction(m_freeCutAct);
+        if (m_cropAct)
+            menu->addAction(m_cropAct);
         if (m_restoreVolAct)
             menu->addAction(m_restoreVolAct);
+        if (m_reset3dAct)
+            menu->addAction(m_reset3dAct);
+        btn->setMenu(menu);
+        tb->addWidget(btn);
+    }
+
+    // Slab flyout — same actions as View > Thick Slab (MPR).
+    {
+        auto* btn = new QToolButton(tb);
+        btn->setText(tr("Slab"));
+        btn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        btn->setPopupMode(QToolButton::InstantPopup);
+        auto* menu = new QMenu(btn);
+        for (auto* a : m_slabActs)
+            menu->addAction(a);
+        btn->setMenu(menu);
+        tb->addWidget(btn);
+    }
+
+    // 3D Preset flyout — same actions as View > 3D Presets.
+    {
+        auto* btn = new QToolButton(tb);
+        btn->setText(tr("3D Preset"));
+        btn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        btn->setPopupMode(QToolButton::InstantPopup);
+        auto* menu = new QMenu(btn);
+        for (auto* a : m_presetActs)
+            menu->addAction(a);
         btn->setMenu(menu);
         tb->addWidget(btn);
     }
