@@ -347,7 +347,13 @@ SliceViewer::SliceViewer(QWidget* parent)
     m_style->onPaint = [this](std::array<double,3> p, bool erase) {
         paintAt(p, erase);
     };
-    m_style->onStroke = [this](bool) { m_paintHasLast = false; };
+    m_style->onStroke = [this](bool begin) {
+        m_paintHasLast = false;
+        if (!begin) {                 // stroke end → flush now
+            m_paintDirty = true;
+            commitPaint();
+        }
+    };
     m_style->onRightClick = [this] {
         emit toolDeselectRequested();
     };
@@ -425,6 +431,11 @@ SliceViewer::SliceViewer(QWidget* parent)
         updatePlaneOrigin();
         m_renderWindow->Render();
     });
+
+    // Paint commits are coalesced — the GPU upload is expensive.
+    m_paintTimer.setInterval(24);
+    connect(&m_paintTimer, &QTimer::timeout, this,
+            &SliceViewer::commitPaint);
 
     // LOD: 150ms after the last interaction, restore full-quality rendering.
     m_lodIdleTimer.setSingleShot(true);
@@ -2105,6 +2116,11 @@ void SliceViewer::paintAt(const std::array<double,3>& world, bool erase)
     const double rv = std::max(1.0, m_brushMm / sp[v]);
 
     // Stamp a filled ellipse centered at voxel (iu, jv) on this slice.
+    // Raw pointer writes — SetScalarComponentFromDouble is far too
+    // slow when a stroke needs hundreds of stamps per mouse event.
+    auto* data = static_cast<unsigned char*>(
+        m_labelmap->GetScalarPointer());
+    const int* dims = m_labelmap->GetDimensions();
     auto stamp = [&](int iu, int jv, int k) {
         int idx[3];
         idx[axis] = k;
@@ -2122,8 +2138,8 @@ void SliceViewer::paintAt(const std::array<double,3>& world, bool erase)
                     continue;
                 idx[u] = i;
                 idx[v] = j;
-                m_labelmap->SetScalarComponentFromDouble(
-                    idx[0], idx[1], idx[2], 0, label);
+                data[(idx[2] * dims[1] + idx[1]) * dims[0] + idx[0]] =
+                    label;
             }
         }
     };
@@ -2136,7 +2152,7 @@ void SliceViewer::paintAt(const std::array<double,3>& world, bool erase)
         const double dz = world[2] - m_lastPaint[2];
         const double dist = std::sqrt(dx*dx + dy*dy + dz*dz);
         const double step = std::max(0.4 * m_brushMm, sp[u] * 0.5);
-        const int    n = std::min(512, int(dist / step));
+        const int    n = std::min(96, int(dist / step));
         pts.reserve(n + 1);
         for (int i = 1; i <= n; ++i) {
             const double t = double(i) / (n + 1);
@@ -2157,6 +2173,21 @@ void SliceViewer::paintAt(const std::array<double,3>& world, bool erase)
     m_lastPaint = world;
     m_paintHasLast = true;
 
+    // Coalesce: a Modified() on the labelmap re-uploads the ENTIRE
+    // volume to the GPU — doing it per mouse event is what makes the
+    // brush feel frozen. Commit on a 24 ms timer instead.
+    m_paintDirty = true;
+    if (!m_paintTimer.isActive())
+        m_paintTimer.start();
+}
+
+void SliceViewer::commitPaint()
+{
+    if (!m_paintDirty || !m_labelmap) {
+        m_paintTimer.stop();
+        return;
+    }
+    m_paintDirty = false;
     m_labelmap->GetPointData()->GetScalars()->Modified();
     m_labelmap->Modified();
     m_renderWindow->Render();

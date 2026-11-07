@@ -147,6 +147,9 @@ public:
     void setBrushRadiusMm(double mm) { m_brushMm = mm; }
     /// Paint/erase a disk at a world-space point on the current slice.
     void paintAt(const std::array<double,3>& world, bool erase);
+    /// 24 ms coalesced labelmap GPU commit (per-event Modified() on a
+    /// big volume re-uploads hundreds of MB — that was the brush lag).
+    void commitPaint();
     /// Overlay labelmap being edited (may be null).
     vtkImageData* labelmap() const { return m_labelmap; }
     /// Remove the most recently drawn annotation.
@@ -322,6 +325,8 @@ private:
     vtkSmartPointer<vtkLookupTable>         m_colorLut;
 
     QTimer m_cineTimer;
+    QTimer m_paintTimer;       // 24 ms paint-commit coalescer
+    bool   m_paintDirty = false;
     QTimer m_lodIdleTimer;     // fires ~150ms after last interaction → HQ
     bool   m_interacting = false;
 };
