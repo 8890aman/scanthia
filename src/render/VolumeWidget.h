@@ -68,6 +68,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
+    void wheelEvent(QWheelEvent* e) override;
     void showEvent(QShowEvent* e) override {
         QVTKOpenGLNativeWidget::showEvent(e);
         setOrientationCube(m_cubeWanted);   // safe once realized
@@ -96,7 +97,6 @@ private:
     vtkSmartPointer<vtkImageData> m_carveImage;
     vtkSmartPointer<vtkImageData> m_srcImage;
     vtkSmartPointer<vtkActor2D>   m_lassoActor;
-    vtkSmartPointer<vtkActor2D>   m_lassoFill;
     vtkSmartPointer<vtkPolyData>  m_lassoPoly;
     bool                          m_cropArmed = false;
     vtkSmartPointer<vtkBoxWidget> m_boxWidget;

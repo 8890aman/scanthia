@@ -27,6 +27,7 @@
 
 #include <QImage>
 #include <QMouseEvent>
+#include <QWheelEvent>
 #include <QPainter>
 #include <QPolygonF>
 
@@ -73,21 +74,6 @@ VolumeWidget::VolumeWidget(QWidget* parent)
     m_renderer->AddActor2D(
         static_cast<vtkProp*>(m_lassoActor.GetPointer()));
 
-    // Translucent fill inside the lasso so the carve region reads
-    // before release.
-    auto fillMapper = vtkSmartPointer<vtkPolyDataMapper2D>::New();
-    fillMapper->SetInputData(m_lassoPoly);
-    auto fillCoord = vtkSmartPointer<vtkCoordinate>::New();
-    fillCoord->SetCoordinateSystemToDisplay();
-    fillMapper->SetTransformCoordinate(fillCoord);
-    m_lassoFill = vtkSmartPointer<vtkActor2D>::New();
-    m_lassoFill->SetMapper(fillMapper);
-    m_lassoFill->GetProperty()->SetColor(1.0, 0.55, 0.1);
-    m_lassoFill->GetProperty()->SetOpacity(0.12);
-    m_lassoFill->VisibilityOff();
-    m_renderer->AddActor2D(
-        static_cast<vtkProp*>(m_lassoFill.GetPointer()));
-
     // Crop box widget — created off; setCropBox arms it.
     m_boxWidget = vtkSmartPointer<vtkBoxWidget>::New();
     auto cb = vtkSmartPointer<vtkCallbackCommand>::New();
@@ -120,7 +106,6 @@ void VolumeWidget::setVolume(const VolumePtr& vol)
     m_lasso.clear();
     m_drawing = false;
     m_lassoActor->VisibilityOff();
-    m_lassoFill->VisibilityOff();
     if (m_volumeProp) {
         m_renderer->RemoveVolume(m_volumeProp);
         m_volumeProp = nullptr;
@@ -268,7 +253,6 @@ void VolumeWidget::setFreeCut(bool on)
         m_drawing = false;
         m_lasso.clear();
         m_lassoActor->VisibilityOff();
-        m_lassoFill->VisibilityOff();
         QWidget::unsetCursor();
     } else {
         QWidget::setCursor(Qt::CrossCursor);
@@ -415,17 +399,8 @@ void VolumeWidget::updateLassoActor()
     }
     m_lassoPoly->SetPoints(pts);
     m_lassoPoly->SetLines(lines);
-    auto polys = vtkSmartPointer<vtkCellArray>::New();
-    if (n >= 3) {
-        polys->InsertNextCell(n);
-        for (int i = 0; i < n; ++i)
-            polys->InsertCellPoint(i);
-    }
-    m_lassoPoly->SetPolys(polys);
     m_lassoPoly->Modified();
-    const int vis = m_lasso.size() > 1;
-    m_lassoActor->SetVisibility(vis);
-    m_lassoFill->SetVisibility(n >= 3 ? 1 : 0);
+    m_lassoActor->SetVisibility(m_lasso.size() > 1);
     m_renderWindow->Render();
 }
 
@@ -439,10 +414,16 @@ std::array<double,2> VolumeWidget::displayPos(const QPoint& p) const
 
 void VolumeWidget::mousePressEvent(QMouseEvent* e)
 {
-    if (m_freeCut && e->button() == Qt::LeftButton) {
-        m_drawing = true;
-        m_lasso.clear();
-        m_lasso.push_back(displayPos(e->pos()));
+    if (m_freeCut) {
+        // Free Cut armed = camera LOCKED on every button. Left draws
+        // the lasso; right/middle/wheel do nothing until the cut is
+        // done or the tool is disarmed — the model must not move
+        // while you're sculpting it.
+        if (e->button() == Qt::LeftButton) {
+            m_drawing = true;
+            m_lasso.clear();
+            m_lasso.push_back(displayPos(e->pos()));
+        }
         e->accept();
         return;
     }
@@ -457,6 +438,10 @@ void VolumeWidget::mouseMoveEvent(QMouseEvent* e)
         e->accept();
         return;
     }
+    if (m_freeCut) {          // armed but not drawing — swallow all
+        e->accept();
+        return;
+    }
     QVTKOpenGLNativeWidget::mouseMoveEvent(e);
 }
 
@@ -465,7 +450,6 @@ void VolumeWidget::mouseReleaseEvent(QMouseEvent* e)
     if (m_drawing && e->button() == Qt::LeftButton) {
         m_drawing = false;
         m_lassoActor->VisibilityOff();
-        m_lassoFill->VisibilityOff();
         if (m_lasso.size() >= 3)
             carveLasso();
         m_lasso.clear();
@@ -476,7 +460,20 @@ void VolumeWidget::mouseReleaseEvent(QMouseEvent* e)
         e->accept();
         return;
     }
+    if (m_freeCut) {          // swallowed press — matching release
+        e->accept();
+        return;
+    }
     QVTKOpenGLNativeWidget::mouseReleaseEvent(e);
+}
+
+void VolumeWidget::wheelEvent(QWheelEvent* e)
+{
+    if (m_freeCut) {          // no zoom while sculpting
+        e->accept();
+        return;
+    }
+    QVTKOpenGLNativeWidget::wheelEvent(e);
 }
 
 void VolumeWidget::mouseDoubleClickEvent(QMouseEvent* e)
