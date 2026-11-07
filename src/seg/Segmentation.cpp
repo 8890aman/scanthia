@@ -175,8 +175,9 @@ Segmentation SegmentationLoader::loadDicomSeg(const std::string& path,
     int maxLabel = 0;
     const double rowCos[3] = {orientation[0], orientation[1], orientation[2]};
     const double colCos[3] = {orientation[3], orientation[4], orientation[5]};
-    const double rowSpacing = pixelSpacing[1]; // DICOM: row then column
-    const double colSpacing = pixelSpacing[0];
+    // DICOM PixelSpacing = row spacing \ column spacing.
+    const double rowSpacing = pixelSpacing[0];
+    const double colSpacing = pixelSpacing[1];
 
     for (unsigned f = 1; f <= nFrames; ++f) {
         const gdcm::DataSet& frame = pfg->GetItem(f).GetNestedDataSet();

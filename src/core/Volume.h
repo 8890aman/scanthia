@@ -72,6 +72,7 @@ private:
     bool                            m_downsampled = false;
     bool                            m_spacingCalibrated = true;
     mutable std::array<double,2>    m_autoRange{-1.0, -1.0};
+    mutable bool                    m_autoRangeValid = false;
     std::array<int, 3>              m_fullExtent{0, 0, 0};
 };
 

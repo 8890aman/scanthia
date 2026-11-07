@@ -625,6 +625,9 @@ void SliceViewer::setVolume(const VolumePtr& vol, Orientation o)
     m_planePos = m_slice * vol->spacing()[axisOf(o)];
     updatePlaneOrigin();
     clearAnnotations();
+    // A labelmap belongs to the previous volume's grid — leaving it
+    // attached lets paintAt write out of bounds on a bigger volume.
+    setOverlay(nullptr, nullptr, 0.0);
     autoWindowLevel();
     // setupCamera (via setOrientation) already centres + fits; a
     // ResetCamera here would refit without the margin.
@@ -826,7 +829,7 @@ bool SliceViewer::event(QEvent* e)
         if (auto* pin = g->gesture(Qt::PinchGesture)) {
             const double sf = static_cast<QPinchGesture*>(pin)->scaleFactor();
             if (sf > 0.01 && std::abs(sf - 1.0) > 0.01)
-                zoomBy(sf);
+                zoomBy(1.0 / sf);   // spread fingers = zoom in
             e->accept();
             return true;
         }
@@ -1230,10 +1233,18 @@ std::array<double,3> SliceViewer::pickPointOnPlane(int displayX,
     toWorld(0.0, nearP);
     toWorld(1.0, farP);
 
-    const int axis = axisOf(m_orientation);
-    const double d = slicePlaneOffset();
-    const double denom = farP[axis] - nearP[axis];
-    const double t = (std::abs(denom) < 1e-9) ? 0.0 : (d - nearP[axis]) / denom;
+    // Intersect the pick ray with the actual slice plane — m_plane's
+    // normal tilts under oblique angles, so an axis-aligned solve
+    // lands the point off the rendered slice.
+    const double* n = m_plane->GetNormal();
+    const double* o = m_plane->GetOrigin();
+    const double pRay = n[0] * (farP[0] - nearP[0])
+                      + n[1] * (farP[1] - nearP[1])
+                      + n[2] * (farP[2] - nearP[2]);
+    const double t = (std::abs(pRay) < 1e-9)
+        ? 0.0
+        : (n[0] * (o[0] - nearP[0]) + n[1] * (o[1] - nearP[1])
+           + n[2] * (o[2] - nearP[2])) / pRay;
     for (int i = 0; i < 3; ++i)
         out[i] = nearP[i] + t * (farP[i] - nearP[i]);
     return out;
@@ -1474,7 +1485,17 @@ void SliceViewer::rebuildAnno(Anno& an)
     hpts->Reset();  hcells->Reset();
 
     auto onPlane = [&](std::array<double,3> p) {
-        p[axis] = plane;
+        if (m_obliquePitch == 0.0 && m_obliqueYaw == 0.0) {
+            p[axis] = plane;
+            return p;
+        }
+        // Oblique: project the point onto m_plane along its normal.
+        const double* n = m_plane->GetNormal();
+        const double* o = m_plane->GetOrigin();
+        const double d = n[0] * (p[0] - o[0]) + n[1] * (p[1] - o[1])
+                       + n[2] * (p[2] - o[2]);
+        for (int i = 0; i < 3; ++i)
+            p[i] -= d * n[i];
         return p;
     };
     auto polyline = [&](const std::vector<std::array<double,3>>& pl) {
@@ -1782,16 +1803,25 @@ void SliceViewer::editAnnoPoint(int annoIdx, int ptIdx,
     }
 
     if (an.kind == 1) {
-        // Corner handles: 0=(au,av) 1=(bu,av) 2=(bu,bv) 3=(au,bv)
-        auto& a = an.p[0];
-        auto& b = an.p[1];
+        // Handles are geometric corners (lo, hiU, hi, hiV of the
+        // min/max box) — pickAnnoHandle builds them that way. Anchor
+        // the opposite corner and store p[0]=min, p[1]=max.
+        const double loU = std::min(an.p[0][u], an.p[1][u]);
+        const double hiU = std::max(an.p[0][u], an.p[1][u]);
+        const double loV = std::min(an.p[0][v], an.p[1][v]);
+        const double hiV = std::max(an.p[0][v], an.p[1][v]);
+        double oppU, oppV;
         switch (ptIdx) {
-        case 0: a[u] = worldPt[u]; a[v] = worldPt[v]; break;
-        case 1: b[u] = worldPt[u]; a[v] = worldPt[v]; break;
-        case 2: b[u] = worldPt[u]; b[v] = worldPt[v]; break;
-        case 3: a[u] = worldPt[u]; b[v] = worldPt[v]; break;
-        default: break;
+        case 0: oppU = hiU; oppV = hiV; break;   // dragged lo
+        case 1: oppU = loU; oppV = hiV; break;   // dragged (hiU,loV)
+        case 2: oppU = loU; oppV = loV; break;   // dragged hi
+        case 3: oppU = hiU; oppV = loV; break;   // dragged (loU,hiV)
+        default:  return;
         }
+        an.p[0][u] = std::min(worldPt[u], oppU);
+        an.p[0][v] = std::min(worldPt[v], oppV);
+        an.p[1][u] = std::max(worldPt[u], oppU);
+        an.p[1][v] = std::max(worldPt[v], oppV);
     } else if (ptIdx >= 0 && ptIdx < 3) {
         auto p = worldPt;
         p[axis] = an.p[size_t(ptIdx)][axis];

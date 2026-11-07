@@ -241,6 +241,7 @@ bool PacsClient::queryStudies(const PacsNode& node,
     scu.release();
 
     if (cond.bad()) {
+        for (auto* rsp : responses) delete rsp;   // caller-owned
         if (err) *err = cond.text();
         return false;
     }
@@ -260,6 +261,7 @@ bool PacsClient::queryStudies(const PacsNode& node,
         r.numSeries         = getStr(rsp->m_dataset, DCM_NumberOfStudyRelatedSeries);
         out.push_back(std::move(r));
     }
+    for (auto* rsp : responses) delete rsp;   // caller-owned
     return true;
 }
 
@@ -293,6 +295,7 @@ bool PacsClient::querySeries(const PacsNode& node,
     scu.release();
 
     if (cond.bad()) {
+        for (auto* rsp : responses) delete rsp;   // caller-owned
         if (err) *err = cond.text();
         return false;
     }
@@ -307,6 +310,7 @@ bool PacsClient::querySeries(const PacsNode& node,
         r.numInstances      = getStr(rsp->m_dataset, DCM_NumberOfSeriesRelatedInstances);
         out.push_back(std::move(r));
     }
+    for (auto* rsp : responses) delete rsp;   // caller-owned
     return true;
 }
 
@@ -340,6 +344,9 @@ bool PacsClient::retrieveStudyMove(const PacsNode& node,
     OFCondition cond =
         scu.sendMOVERequest(presID, ofstr(moveDestAET), &query, &responses);
     scu.release();
+    // Response objects are caller-owned — free them or every retrieve
+    // leaks one object per pending response.
+    for (auto* r : responses) delete r;
 
     if (cond.bad()) {
         if (err) *err = cond.text();
@@ -388,6 +395,7 @@ bool PacsClient::retrieveStudyGet(const PacsNode& node,
     scu.release();
 
     if (cond.bad()) {
+        for (auto* r : responses) delete r;   // caller-owned
         if (err) *err = cond.text();
         return false;
     }
@@ -402,12 +410,14 @@ bool PacsClient::retrieveStudyGet(const PacsNode& node,
         warned    = r->m_numberOfWarningSubops;
     }
     if (completed == 0 && (failed > 0 || warned > 0)) {
+        for (auto* r : responses) delete r;
         if (err) *err = QString("C-GET: 0 completed, %1 failed, %2 warned "
                                 "(check role negotiation / storage SOP "
                                 "classes)").arg(failed).arg(warned)
                             .toStdString();
         return false;
     }
+    for (auto* r : responses) delete r;
     return true;
 }
 
@@ -449,6 +459,7 @@ bool PacsClient::queryStudies(const PacsNode& node,
     scu.release();
 
     if (cond.bad()) {
+        for (auto* rsp : responses) delete rsp;   // caller-owned
         if (err) *err = cond.text();
         return false;
     }
@@ -468,6 +479,7 @@ bool PacsClient::queryStudies(const PacsNode& node,
         r.numSeries         = getStr(rsp->m_dataset, DCM_NumberOfStudyRelatedSeries);
         out.push_back(std::move(r));
     }
+    for (auto* rsp : responses) delete rsp;   // caller-owned
     return true;
 }
 

@@ -38,7 +38,9 @@ std::array<double, 2> Volume::scalarRange() const
 
 std::array<double, 2> Volume::autoWindowRange() const
 {
-    if (m_autoRange[0] >= 0.0)
+    // Negative low values are legitimate results (CT air ≈ -1000) — a
+    // value sentinel would recompute the histogram on every call.
+    if (m_autoRangeValid)
         return m_autoRange;
 
     const auto* buf = m_itk->GetBufferPointer();
@@ -66,8 +68,11 @@ std::array<double, 2> Volume::autoWindowRange() const
         hi = std::max(hi, v);
         ++n;
     }
-    if (!n || hi <= lo)
-        return m_autoRange = {lo < hi ? lo : 0.0, hi > lo ? hi : 1.0};
+    if (!n || hi <= lo) {
+        m_autoRange = {lo < hi ? lo : 0.0, hi > lo ? hi : 1.0};
+        m_autoRangeValid = true;
+        return m_autoRange;
+    }
 
     // Pass 2: 2048-bin histogram, take 0.5% / 99.5% percentiles — trims
     // single hot voxels and air/padding residue that min/max keep.
@@ -96,6 +101,7 @@ std::array<double, 2> Volume::autoWindowRange() const
     m_autoRange = {lo + bLo * binW, lo + bHi * binW};
     if (m_autoRange[1] <= m_autoRange[0])
         m_autoRange = {lo, hi};
+    m_autoRangeValid = true;
     return m_autoRange;
 }
 

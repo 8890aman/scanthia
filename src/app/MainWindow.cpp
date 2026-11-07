@@ -1236,6 +1236,20 @@ void MainWindow::buildMenus()
     };
     for (auto* a : cutActs)
         connect(a, &QAction::triggered, this, applyCut);
+    cutMenu->addSeparator();
+    // medecoro FreeCut parity: freehand lasso sculpt on the 3D view.
+    auto* freeCutAct = cutMenu->addAction(tr("Free Cut (lasso)"), this,
+        [this](bool on) {
+            m_mpr->volumeView()->setFreeCut(on);
+            m_statusLabel->setText(on
+                ? tr("Free Cut: drag a lasso on the 3D view")
+                : tr("Free Cut off"));
+        });
+    freeCutAct->setCheckable(true);
+    cutMenu->addAction(tr("Restore 3D Volume"), this, [this] {
+        m_mpr->volumeView()->restoreVolume();
+        m_statusLabel->setText(tr("3D volume restored"));
+    });
 
     // Color lookup tables (applied after window/level).
     auto* lutMenu = view->addMenu(tr("Color Map"));
@@ -3160,9 +3174,12 @@ void MainWindow::fuseSeries(const QString& uid)
         return;
     const int gen = m_loadGen.load();   // cancel if the base series swaps
     const QString name = QString::fromStdString(series.seriesDescription);
+    // Snapshot the base volume on the GUI thread — reading m_volume
+    // inside the worker races with loadSeries/openFiles reassigning it.
+    const VolumePtr base = m_volume;
     m_statusLabel->setText(tr("Fusing %1...").arg(name));
 
-    QtConcurrent::run([this, gen, series, name] {
+    QtConcurrent::run([this, gen, series, name, base] {
         try {
             DicomLoader::StreamCallbacks cb;
             cb.shouldCancel = [this, gen] {
@@ -3171,7 +3188,7 @@ void MainWindow::fuseSeries(const QString& uid)
             auto fused = DicomLoader::loadSeriesStreaming(series, cb);
             if (!fused || gen != m_loadGen.load())
                 return;
-            auto img = DicomLoader::resampleOntoGrid(fused, m_volume);
+            auto img = DicomLoader::resampleOntoGrid(fused, base);
             if (gen != m_loadGen.load())
                 return;
             // Mild blur on the overlay — smooths the blocky edges of the

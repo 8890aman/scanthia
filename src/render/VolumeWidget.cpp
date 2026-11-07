@@ -2,17 +2,29 @@
 
 #include <vtkActor.h>
 #include <vtkCamera.h>
+#include <vtkCellArray.h>
 #include <vtkColorTransferFunction.h>
+#include <vtkCoordinate.h>
 #include <vtkGPUVolumeRayCastMapper.h>
 #include <vtkImageData.h>
 #include <vtkInteractorStyleTrackballCamera.h>
+#include <vtkMatrix4x4.h>
 #include <vtkPiecewiseFunction.h>
 #include <vtkPlane.h>
+#include <vtkPointData.h>
 #include <vtkPlaneCollection.h>
 #include <vtkPlaneSource.h>
+#include <vtkPoints.h>
 #include <vtkPolyDataMapper.h>
+#include <vtkPolyDataMapper2D.h>
 #include <vtkProperty.h>
+#include <vtkProperty2D.h>
 #include <vtkVolumeProperty.h>
+
+#include <QImage>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPolygonF>
 
 namespace meda {
 
@@ -39,11 +51,31 @@ VolumeWidget::VolumeWidget(QWidget* parent)
         a->PickableOff();
         m_renderer->AddActor(a);
     }
+
+    // Lasso overlay — display-space polyline, hidden until drawing.
+    m_lassoPoly = vtkSmartPointer<vtkPolyData>::New();
+    auto lassoMapper = vtkSmartPointer<vtkPolyDataMapper2D>::New();
+    auto lassoCoord = vtkSmartPointer<vtkCoordinate>::New();
+    lassoCoord->SetCoordinateSystemToDisplay();
+    lassoMapper->SetInputData(m_lassoPoly);
+    lassoMapper->SetTransformCoordinate(lassoCoord);
+    m_lassoActor = vtkSmartPointer<vtkActor2D>::New();
+    m_lassoActor->SetMapper(lassoMapper);
+    m_lassoActor->GetProperty()->SetColor(1.0, 0.55, 0.1);
+    m_lassoActor->GetProperty()->SetLineWidth(2.0);
+    m_lassoActor->VisibilityOff();
+    m_renderer->AddActor2D(
+        static_cast<vtkProp*>(m_lassoActor.GetPointer()));
 }
 
 void VolumeWidget::setVolume(const VolumePtr& vol)
 {
     m_volume = vol;
+    m_carveImage = nullptr;
+    m_srcImage = vol ? vol->vtkImage() : nullptr;
+    m_lasso.clear();
+    m_drawing = false;
+    m_lassoActor->VisibilityOff();
     if (m_volumeProp) {
         m_renderer->RemoveVolume(m_volumeProp);
         m_volumeProp = nullptr;
@@ -169,6 +201,189 @@ void VolumeWidget::setCutMask(unsigned mask)
 {
     m_cutMask = mask;
     updateCutPlanes();
+    m_renderWindow->Render();
+}
+
+void VolumeWidget::setFreeCut(bool on)
+{
+    m_freeCut = on;
+    if (!on) {
+        m_drawing = false;
+        m_lasso.clear();
+        m_lassoActor->VisibilityOff();
+        QWidget::unsetCursor();
+    } else {
+        QWidget::setCursor(Qt::CrossCursor);
+    }
+    m_renderWindow->Render();
+}
+
+void VolumeWidget::restoreVolume()
+{
+    if (!m_volumeProp)
+        return;
+    auto* mapper = vtkGPUVolumeRayCastMapper::SafeDownCast(
+        m_volumeProp->GetMapper());
+    if (mapper && m_srcImage && m_carveImage) {
+        mapper->SetInputData(m_srcImage);
+        m_carveImage = nullptr;
+        m_renderWindow->Render();
+    }
+}
+
+void VolumeWidget::updateLassoActor()
+{
+    auto pts = vtkSmartPointer<vtkPoints>::New();
+    auto lines = vtkSmartPointer<vtkCellArray>::New();
+    const int n = static_cast<int>(m_lasso.size());
+    lines->InsertNextCell(n);
+    for (int i = 0; i < n; ++i) {
+        pts->InsertNextPoint(m_lasso[i][0], m_lasso[i][1], 0.0);
+        lines->InsertCellPoint(i);
+    }
+    m_lassoPoly->SetPoints(pts);
+    m_lassoPoly->SetLines(lines);
+    m_lassoPoly->Modified();
+    m_lassoActor->SetVisibility(m_lasso.size() > 1);
+    m_renderWindow->Render();
+}
+
+std::array<double,2> VolumeWidget::displayPos(const QPoint& p) const
+{
+    const int* rs = m_renderWindow->GetSize();
+    const double sx = rs[0] / double(width());
+    const double sy = rs[1] / double(height());
+    return {p.x() * sx, (height() - 1 - p.y()) * sy};
+}
+
+void VolumeWidget::mousePressEvent(QMouseEvent* e)
+{
+    if (m_freeCut && e->button() == Qt::LeftButton) {
+        m_drawing = true;
+        m_lasso.clear();
+        m_lasso.push_back(displayPos(e->pos()));
+        e->accept();
+        return;
+    }
+    QVTKOpenGLNativeWidget::mousePressEvent(e);
+}
+
+void VolumeWidget::mouseMoveEvent(QMouseEvent* e)
+{
+    if (m_drawing) {
+        m_lasso.push_back(displayPos(e->pos()));
+        updateLassoActor();
+        e->accept();
+        return;
+    }
+    QVTKOpenGLNativeWidget::mouseMoveEvent(e);
+}
+
+void VolumeWidget::mouseReleaseEvent(QMouseEvent* e)
+{
+    if (m_drawing && e->button() == Qt::LeftButton) {
+        m_drawing = false;
+        m_lassoActor->VisibilityOff();
+        if (m_lasso.size() >= 3)
+            carveLasso();
+        m_lasso.clear();
+        e->accept();
+        return;
+    }
+    QVTKOpenGLNativeWidget::mouseReleaseEvent(e);
+}
+
+void VolumeWidget::carveLasso()
+{
+    if (!m_volumeProp)
+        return;
+    auto* mapper = vtkGPUVolumeRayCastMapper::SafeDownCast(
+        m_volumeProp->GetMapper());
+    if (!mapper || !m_srcImage)
+        return;
+    // Carve on a detached copy so the MPR slices keep the real data.
+    if (!m_carveImage) {
+        m_carveImage = vtkSmartPointer<vtkImageData>::New();
+        m_carveImage->DeepCopy(m_srcImage);
+        mapper->SetInputData(m_carveImage);
+    }
+    vtkImageData* img = m_carveImage;
+    int dims[3];
+    img->GetDimensions(dims);
+    const double* org = img->GetOrigin();
+    const double* spc = img->GetSpacing();
+
+    const int* rs = m_renderWindow->GetSize();
+    const int w = rs[0], h = rs[1];
+    if (w < 2 || h < 2)
+        return;
+
+    // Rasterize the lasso into a display-space mask (Qt coords: y down,
+    // so display y is flipped when rasterizing and when sampling).
+    QImage maskImg(w, h, QImage::Format_Grayscale8);
+    maskImg.fill(0);
+    QPolygonF poly;
+    for (const auto& p : m_lasso)
+        poly << QPointF(p[0], h - 1.0 - p[1]);
+    {
+        QPainter pt(&maskImg);
+        pt.setPen(Qt::NoPen);
+        pt.setBrush(Qt::white);
+        pt.drawPolygon(poly);
+    }
+    const int stride = maskImg.bytesPerLine();
+    const uchar* mask = maskImg.constBits();
+    const QRectF bb = poly.boundingRect();
+
+    // world -> clip 4x4 (projection * view; the volume sits at identity).
+    auto* cam = m_renderer->GetActiveCamera();
+    m_renderer->ComputeAspect();
+    const double asp = m_renderer->GetAspect()[0] / m_renderer->GetAspect()[1];
+    const double* cr = cam->GetClippingRange();
+    auto comp = vtkSmartPointer<vtkMatrix4x4>::New();
+    vtkMatrix4x4::Multiply4x4(
+        cam->GetProjectionTransformMatrix(asp, cr[0], cr[1]),
+        cam->GetViewTransformMatrix(), comp);
+    const double* M = &comp->Element[0][0];   // row-major 4x4
+
+    auto* scalars = img->GetPointData()->GetScalars();
+    double rng[2];
+    scalars->GetRange(rng);
+    const double air = rng[0];
+    const double dxs = spc[0], dys = spc[1], dzs = spc[2];
+    long carved = 0;
+
+    for (int k = 0; k < dims[2]; ++k) {
+        const double wz = org[2] + k * dzs;
+        for (int j = 0; j < dims[1]; ++j) {
+            const double wy = org[1] + j * dys;
+            // Clip-space values advance linearly along the row.
+            double cx = M[0] * org[0] + M[1] * wy + M[2] * wz + M[3];
+            double cy = M[4] * org[0] + M[5] * wy + M[6] * wz + M[7];
+            double cw = M[12] * org[0] + M[13] * wy + M[14] * wz + M[15];
+            const double dcx = M[0] * dxs, dcy = M[4] * dxs, dcw = M[12] * dxs;
+            for (int i = 0; i < dims[0]; ++i, cx += dcx, cy += dcy, cw += dcw) {
+                if (cw <= 1e-9)
+                    continue;
+                const int px = int((cx / cw * 0.5 + 0.5) * w + 0.5);
+                const int py = int((cy / cw * 0.5 + 0.5) * h + 0.5);
+                if (px < bb.left() || px > bb.right() ||
+                    py < (h - 1 - bb.bottom()) || py > (h - 1 - bb.top()) ||
+                    px < 0 || py < 0 || px >= w || py >= h)
+                    continue;
+                if (mask[(h - 1 - py) * stride + px]) {
+                    scalars->SetComponent(k * dims[0] * dims[1] + j * dims[0] + i,
+                                          0, air);
+                    ++carved;
+                }
+            }
+        }
+    }
+    if (carved) {
+        scalars->Modified();
+        img->Modified();
+        mapper->Modified();
+    }
     m_renderWindow->Render();
 }
 

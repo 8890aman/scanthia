@@ -6,12 +6,16 @@
 #include <QVTKOpenGLNativeWidget.h>
 
 #include <vtkSmartPointer.h>
+#include <vtkActor2D.h>
 #include <vtkPlane.h>
+#include <vtkPolyData.h>
+#include <vtkImageData.h>
 #include <vtkRenderer.h>
 #include <vtkVolume.h>
 #include <vtkGenericOpenGLRenderWindow.h>
 
 #include <array>
+#include <vector>
 
 namespace meda {
 
@@ -32,16 +36,41 @@ public:
     /// halves respectively; planes track the cursor while scrolling.
     void setCutMask(unsigned mask);
     unsigned cutMask() const { return m_cutMask; }
+    /// Freehand lasso sculpt (medecoro-style): while armed, LMB draws a
+    /// lasso on the 3D view; on release every voxel projecting inside
+    /// the loop is carved to air on a detached copy — MPR is untouched.
+    void setFreeCut(bool on);
+    bool freeCutArmed() const { return m_freeCut; }
+    /// Discard all carving and show the pristine volume again.
+    void restoreVolume();
+
+protected:
+    void mousePressEvent(QMouseEvent* e) override;
+    void mouseMoveEvent(QMouseEvent* e) override;
+    void mouseReleaseEvent(QMouseEvent* e) override;
 
 private:
     void applyCtPreset(const QString& preset);
     void updatePlaneActors();
     void updateCutPlanes();
+    void updateLassoActor();
+    void carveLasso();
+    std::array<double,2> displayPos(const QPoint& p) const;
 
     VolumePtr      m_volume;
     bool           m_showPlanes = true;
     unsigned       m_cutMask = 0;
+    bool           m_freeCut = false;
+    bool           m_drawing  = false;
     std::array<double,3> m_cursor{0, 0, 0};
+    /// Lasso points in VTK display coords (y up), render-window pixels.
+    std::vector<std::array<double,2>> m_lasso;
+    /// Detached copy the 3D mapper renders once carving begins —
+    /// the source vtkImageData stays clean for the MPR views.
+    vtkSmartPointer<vtkImageData> m_carveImage;
+    vtkSmartPointer<vtkImageData> m_srcImage;
+    vtkSmartPointer<vtkActor2D>   m_lassoActor;
+    vtkSmartPointer<vtkPolyData>  m_lassoPoly;
 
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer>    m_renderer;

@@ -408,13 +408,18 @@ void DicomLoader::sortFiles(std::vector<std::string>& files,
         return;
     }
     // Stable sort by key; keep files with missing keys at the end.
-    std::stable_sort(files.begin(), files.end(),
-        [&](const std::string& a, const std::string& b) {
-            const auto ka = keys[&a - files.data()];
-            const auto kb = keys[&b - files.data()];
-            if (ka.empty() && kb.empty()) return false;
-            if (ka.empty()) return false;
-            if (kb.empty()) return true;
+    // Decorate-sort-undecorate: indexing keys by a file's position
+    // inside the comparator reads a stale slot once elements move.
+    std::vector<std::pair<std::string, std::string>> decorated;
+    decorated.reserve(files.size());
+    for (size_t i = 0; i < files.size(); ++i)
+        decorated.emplace_back(keys[i], std::move(files[i]));
+    std::stable_sort(decorated.begin(), decorated.end(),
+        [](const auto& A, const auto& B) {
+            const auto& ka = A.first;
+            const auto& kb = B.first;
+            if (ka.empty() || kb.empty())
+                return !ka.empty();   // missing keys sort last
             // Numeric when both parse as numbers.
             const char* pa = ka.c_str();
             const char* pb = kb.c_str();
@@ -426,6 +431,10 @@ void DicomLoader::sortFiles(std::vector<std::string>& files,
                 return da < db;
             return ka < kb;
         });
+    files.clear();
+    files.reserve(decorated.size());
+    for (auto& d : decorated)
+        files.push_back(std::move(d.second));
 }
 
 std::vector<SeriesMeta> DicomLoader::scanDirectory(const std::string& dir)
@@ -905,6 +914,7 @@ VolumePtr DicomLoader::loadSeriesStreaming(const SeriesMeta& series,
             return zs[a] < zs[b];
         });
         std::vector<std::string> sorted;
+        std::vector<double>      sortedZ;
         std::set<long> seen;
         for (size_t i : ord) {
             const long key = std::isnan(zs[i]) ? i
@@ -912,8 +922,10 @@ VolumePtr DicomLoader::loadSeriesStreaming(const SeriesMeta& series,
             if (!seen.insert(key).second)
                 continue;             // duplicate z — skip
             sorted.push_back(files[i]);
+            sortedZ.push_back(zs[i]);
         }
         files = std::move(sorted);
+        zs    = std::move(sortedZ);   // zs now tracks sorted files
     }
     const int nSlices = static_cast<int>(files.size());
 
