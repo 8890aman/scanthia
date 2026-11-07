@@ -1221,35 +1221,36 @@ void MainWindow::buildMenus()
         "Cut Left side",  "Cut Right side",   // +/- X (LPS: +X = left)
         "Cut Back side",  "Cut Front side",   // +/- Y (-Y = anterior)
         "Cut Top",        "Cut Bottom"};      // +/- Z (+Z = superior)
-    QVector<QAction*> cutActs;
+    m_cutActs.clear();
     for (const char* l : cutLabels) {
         auto* a = cutMenu->addAction(tr(l));
         a->setCheckable(true);
-        cutActs.push_back(a);
+        m_cutActs.push_back(a);
     }
-    auto applyCut = [this, cutActs] {
+    auto applyCut = [this] {
         unsigned mask = 0;
-        for (int i = 0; i < cutActs.size(); ++i)
-            if (cutActs[i]->isChecked())
+        for (int i = 0; i < m_cutActs.size(); ++i)
+            if (m_cutActs[i]->isChecked())
                 mask |= (1u << i);
         m_mpr->volumeView()->setCutMask(mask);
     };
-    for (auto* a : cutActs)
+    for (auto* a : m_cutActs)
         connect(a, &QAction::triggered, this, applyCut);
     cutMenu->addSeparator();
     // medecoro FreeCut parity: freehand lasso sculpt on the 3D view.
-    auto* freeCutAct = cutMenu->addAction(tr("Free Cut (lasso)"), this,
+    m_freeCutAct = cutMenu->addAction(tr("Free Cut (lasso)"), this,
         [this](bool on) {
             m_mpr->volumeView()->setFreeCut(on);
             m_statusLabel->setText(on
                 ? tr("Free Cut: drag a lasso on the 3D view")
                 : tr("Free Cut off"));
         });
-    freeCutAct->setCheckable(true);
-    cutMenu->addAction(tr("Restore 3D Volume"), this, [this] {
-        m_mpr->volumeView()->restoreVolume();
-        m_statusLabel->setText(tr("3D volume restored"));
-    });
+    m_freeCutAct->setCheckable(true);
+    m_restoreVolAct = cutMenu->addAction(tr("Restore 3D Volume"), this,
+        [this] {
+            m_mpr->volumeView()->restoreVolume();
+            m_statusLabel->setText(tr("3D volume restored"));
+        });
 
     // Color lookup tables (applied after window/level).
     auto* lutMenu = view->addMenu(tr("Color Map"));
@@ -1656,6 +1657,33 @@ void MainWindow::buildToolbar()
                 m_compareView->setEditLabel(v);
             });
     tb->addWidget(labelSpin);
+
+    // 3D Cut flyout — same actions as View > 3D Cut, one click away.
+    {
+        auto* btn = new QToolButton(tb);
+        btn->setText(tr("3D Cut"));
+        btn->setIcon(toolIcon("scissors"));
+        btn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        btn->setPopupMode(QToolButton::InstantPopup);
+        auto* menu = new QMenu(btn);
+        auto* cap = new QWidgetAction(menu);
+        auto* capLabel = new QLabel(tr("CLIP SIDES"), menu);
+        capLabel->setStyleSheet(
+            "color: #8E99A6; font-size: 10px; font-weight: 600;"
+            "padding: 4px 12px;");
+        capLabel->setEnabled(false);
+        cap->setDefaultWidget(capLabel);
+        menu->addAction(cap);
+        for (auto* a : m_cutActs)
+            menu->addAction(a);
+        menu->addSeparator();
+        if (m_freeCutAct)
+            menu->addAction(m_freeCutAct);
+        if (m_restoreVolAct)
+            menu->addAction(m_restoreVolAct);
+        btn->setMenu(menu);
+        tb->addWidget(btn);
+    }
 
     // Colormap dropdown with live gradient previews — same list as
     // View → Color Map, kept in sync via the shared action group.

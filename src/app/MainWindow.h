@@ -161,6 +161,11 @@ private:
     QAction*      m_cineAction = nullptr;
     QAction*      m_compareAction = nullptr;
     QAction*      m_popoutAction = nullptr;
+    // 3D cut actions are shared between View > 3D Cut and the
+    // toolbar's 3D Cut flyout.
+    QVector<QAction*> m_cutActs;
+    QAction*      m_freeCutAct = nullptr;
+    QAction*      m_restoreVolAct = nullptr;
     QMainWindow*  m_compareWindow = nullptr;
     QHBoxLayout*  m_singleLay = nullptr;
     void popOutCompare(bool on);
