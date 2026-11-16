@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(Scanthia
-    VERSION 1.1.1
+    VERSION 1.1.3
     DESCRIPTION "Open-source medical imaging viewer"
     LANGUAGES CXX
 )

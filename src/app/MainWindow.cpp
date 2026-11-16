@@ -1679,10 +1679,11 @@ void MainWindow::buildMenus()
                     &MainWindow::showShortcutsHelp);
     help->addAction(tr("&About Scanthia"), this, [this] {
         QMessageBox::about(this, tr("About Scanthia"),
-            tr("Scanthia — open-source DICOM viewer\n"
+            tr("Scanthia %1 — open-source DICOM viewer\n"
                "Qt6 / VTK / ITK / DCMTK\n"
                "Research & engineering tool — not a certified\n"
-               "medical device."));
+               "medical device.")
+                .arg(SCANTHIA_VERSION));
     });
 
     // Apply user-customized shortcuts (QSettings "shortcuts/<objectName>").

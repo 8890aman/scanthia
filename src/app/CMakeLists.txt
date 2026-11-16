@@ -8,6 +8,9 @@ add_executable(Scanthia WIN32
     Scanthia.rc
 )
 
+target_compile_definitions(Scanthia PRIVATE
+    SCANTHIA_VERSION="${PROJECT_VERSION}")
+
 target_link_libraries(Scanthia PRIVATE
     meda_core
     meda_io
